@@ -269,7 +269,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		Color color = colors.get(index == -1 ? selectedColor : index);
 		SwingUtilities.invokeLater(() ->
 		{
-			RuneliteColorPicker colorPicker = colorPickerManager.create(SwingUtilities.windowForComponent((Applet) client),
+			RuneliteColorPicker colorPicker = colorPickerManager.create(client,
 				color != null ? color : Color.decode("#FFFFFF"), "Item color", true);
 			colorPicker.setOnClose(c -> {
 				if (index == -1) {
