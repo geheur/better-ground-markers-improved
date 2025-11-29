@@ -9,12 +9,10 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.Polygon;
-import java.awt.Rectangle;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Point2D;
-import java.lang.reflect.Array;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -24,11 +22,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
-
 import com.rspaint.ui.ColorToolbarButton;
 import com.rspaint.ui.NewColorToolbarButton;
-import com.rspaint.ui.ToolbarButton;
-import lombok.RequiredArgsConstructor;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
@@ -39,7 +34,6 @@ import net.runelite.api.Tile;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ClientTick;
-import net.runelite.api.events.FocusChanged;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -73,8 +67,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
     boolean drawable = false;   // last menu entries contained WALK.
     Stroke currentStroke = null;
 
-    // Stroke size (in tenths)
-    int strokeWidth = 10;
     // Designated "New Color" button
     NewColorToolbarButton newColorToolbarButton = new NewColorToolbarButton(0);
     // List of colors in our arsenal
