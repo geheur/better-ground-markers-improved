@@ -9,7 +9,6 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.Polygon;
-import java.awt.Rectangle;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.awt.geom.Ellipse2D;
@@ -23,9 +22,9 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
-import lombok.RequiredArgsConstructor;
+import com.rspaint.ui.ColorToolbarButton;
+import com.rspaint.ui.NewColorToolbarButton;
 import net.runelite.api.Client;
-import net.runelite.api.Constants;
 import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
@@ -35,11 +34,9 @@ import net.runelite.api.Tile;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.events.ClientTick;
-import net.runelite.api.events.FocusChanged;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
-import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.input.KeyListener;
 import net.runelite.client.input.MouseListener;
 import net.runelite.client.ui.components.colorpicker.ColorPickerManager;
@@ -62,24 +59,40 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	static pf pf(float x, float y) { return new pf(x, y); }
 	static pf pf(Point p) { return new pf(p.getX(), p.getY()); }
 
-	@Inject
+    // State variables
+    boolean dDown = false;      // draw keybind is held.
+    boolean drawing = false;    // mouse is down and drawing.
+    boolean eDown = false;      // erase keybind is held.
+    boolean erasing = false;    // mouse is down and erasing.
+    boolean drawable = false;   // last menu entries contained WALK.
+    Stroke currentStroke = null;
+
+    // Designated "New Color" button
+    NewColorToolbarButton newColorToolbarButton = new NewColorToolbarButton(0);
+    // List of colors in our arsenal
+    List<ColorToolbarButton> colorPalette = new ArrayList<>();
+
+    Graphics2D graphics = null;
+    Point lastMouseCanvasPosition = null;
+
+    Map<Integer, List<Stroke>> strokesByRegion = new HashMap<>();
+
+    // Unused but required overrides
+    @Override public void keyReleased(KeyEvent e) { }
+    @Override public void keyTyped(KeyEvent e) { }
+    @Override public MouseEvent mouseClicked(MouseEvent e) { return e; }
+    @Override public MouseEvent mouseEntered(MouseEvent e) { return e; }
+    @Override public MouseEvent mouseExited(MouseEvent e) { return e; }
+    @Override public MouseEvent mouseDragged(MouseEvent e) { return e; }
+    @Override public MouseEvent mouseMoved(MouseEvent e) { return e; }
+
+    @Inject
 	public BGMIOverlay()
 	{
 		setPosition(OverlayPosition.DYNAMIC);
 		setPriority(Overlay.PRIORITY_LOW);
 		setLayer(OverlayLayer.ABOVE_SCENE);
 	}
-
-//	List<Stroke> strokes = new ArrayList<>();
-	Stroke currentStroke = null;
-
-	int strokeWidth = 10; // in tenths.
-	List<Color> colors = new ArrayList<>();
-	int selectedColor = 0;
-
-	Graphics2D graphics = null;
-
-	Point lastMouseCanvasPosition = null;
 
 	@Override
 	public Dimension render(Graphics2D graphics)
@@ -94,13 +107,15 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		boolean showUi = eDown || dDown || drawing || erasing;
 		boolean overUi = false;
 		if (showUi) {
-			for (int i = 0; i < buttons.size(); i++) {
-				Rectangle r = toolbarButtonClickbox(i);
-				if (r.contains(mx, my)) {
-					overUi = true;
-					break;
-				}
-			}
+            if (newColorToolbarButton.mouseOver(client)){
+                overUi = true;
+            }
+            for (ColorToolbarButton button : colorPalette){
+                if (button.mouseOver(client)){
+                    overUi = true;
+                    break;
+                }
+            }
 		}
 
 		// get tile.
@@ -119,12 +134,10 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			for (int i = 0; i < xdiffs.length; i++)
 			{
 				LocalPoint plus = tile.getLocalLocation().plus(xdiffs[i] * 128, ydiffs[i] * 128);
-//			System.out.println(plus);
 				Polygon test = Perspective.getCanvasTilePoly(client, plus);
 				if (!overUi && debug && showUi) graphics.draw(test);
 				if (test != null && test.contains(mx, my))
 				{
-//				System.out.println("found matching polygon after " + i + " polygons");
 					poly = test;
 					tilex = tile.getWorldLocation().getX() + xdiffs[i];
 					tiley = tile.getWorldLocation().getY() + ydiffs[i];
@@ -148,13 +161,16 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				pf sub = getBarycentre(mx, my, x0, y0, x1, y1, x2, y2, x3, y3);
 				ground = projectToScreen(sub.x, sub.y, x0, y0, x1, y1, x2, y2, x3, y3);
 
-//			if (sub.x > 1.05 || sub.x < -0.05 || sub.y > 1.05 || sub.y < -0.05) System.out.println("here " + sub.x + " " + sub.y);
-
 				if (drawing) {
 					if (currentStroke == null) {
 						currentStroke = new Stroke();
-						currentStroke.color = colors.get(selectedColor);
-						currentStroke.strokeWidth = 1.0f;//config.drawStrokeWidth();
+                        currentStroke.color = null;
+                        for (ColorToolbarButton button : colorPalette){
+                            if (button.isSelected()){
+                                currentStroke.color = button.getColor();
+                            }
+                        }
+						currentStroke.strokeWidth = 1.0f;
 						strokesByRegion.computeIfAbsent(new WorldPoint(tilex, tiley, 0).getRegionID(), k -> new ArrayList<>()).add(currentStroke);
 					}
 					currentStroke.pts.add(new StrokePoint(tilex, tiley, sub.x, sub.y));
@@ -170,146 +186,104 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		if (showUi) {
 			if (!overUi) {
 				if (eDown || erasing) {
+                    // Draw the eraser circle
 					graphics.setColor(Color.PINK);
 					graphics.draw(new Ellipse2D.Float(mx - 10, my - 10, 20, 20));
 				} else if ((dDown || drawing) && ground != null) {
-					graphics.setColor(colors.get(selectedColor));
+                    // Draw brush point
+                    for (ColorToolbarButton button : colorPalette){
+                        if (button.isSelected()){
+                            graphics.setColor(button.getColor());
+                        }
+                    }
 					graphics.drawRect((int) ground.x - 1, (int) ground.y - 1, 2, 2);
 				}
 			}
 
-			for (int i = 0; i < buttons.size(); i++)
-			{
-				Rectangle rectangle = toolbarButtonClickbox(i);
-				boolean mouseOver = rectangle.contains(mx, my);
-				buttons.get(i).draw(graphics, toolbarButtonVisibleBounds(i), mouseOver);
-			}
+            // Draw overlay buttons
+            newColorToolbarButton.draw(graphics, client);
+            drawPalette();
+
 		}
 
 		lastMouseCanvasPosition = client.getMouseCanvasPosition();
 		return null;
 	}
 
-	List<ToolbarButton> buttons = new ArrayList<>();
-	{
-		buttons.add(new ToolbarButton() {
-			@Override public void draw(Graphics2D g, Rectangle r, boolean mouseOver) {
-				g.setColor(Color.LIGHT_GRAY);
-				g.drawLine(r.x + r.width / 2, r.y + 3, r.x + r.width / 2, r.y + r.height - 3);
-				g.drawLine(r.x + 3, r.y + r.height / 2, r.x + r.width - 3, r.y + r.height / 2);
-				super.draw(g, r, mouseOver);
-			}
-			@Override public void addMenuEntries() {
-				client.createMenuEntry(-1).setOption("New color").onClick(me -> pickColor(-1));
-			}
-		});
-		for (int i = 0; i < 10; i++) {
-			buttons.add(new ColorToolbarButton(i));
-		}
-	}
 
-	class ToolbarButton {
-		public void draw(Graphics2D g, Rectangle r, boolean mouseOver) {
-			if (mouseOver) {
-				g.setColor(Color.WHITE);
-				Rectangle r2 = new Rectangle(r);
-				r2.grow(1, 1);
-				g.draw(r);
-			} else {
-				g.setColor(Color.LIGHT_GRAY);
-			}
-			g.draw(r);
-		}
-
-		public void addMenuEntries() { }
-		public void onDrag(ToolbarButton b) { }
-	}
-
-	@RequiredArgsConstructor
-	class ColorToolbarButton extends ToolbarButton {
-		final int colorIndex;
-		@Override public void draw(Graphics2D g, Rectangle r, boolean mouseOver) {
-			Color color = colorIndex < colors.size() ? colors.get(colorIndex) : null;
-			if (colorIndex == selectedColor) r.grow(2, 2);
-			if (color != null) {
-				g.setColor(color);
-				g.fill(r);
-			}
-			g.setColor((mouseOver || colorIndex == selectedColor) ? Color.WHITE : Color.GRAY);
-			g.draw(r);
-		}
-
-		@Override public void addMenuEntries() {
-			Color color = colors.get(colorIndex);
-			if (color != null) {
-				client.createMenuEntry(1).setOption(ColorUtil.wrapWithColorTag("Select color", color)).onClick(me -> {
-					selectedColor = colorIndex;
-				});
-			}
-			client.createMenuEntry(1).setOption("Choose ").setTarget("new color").onClick(me -> {
-				pickColor(colorIndex);
-			});
-		}
-
-		@Override public void onDrag(ToolbarButton b) {
-			if (b instanceof ColorToolbarButton) {
-				int otherIndex = ((ColorToolbarButton) b).colorIndex;
-				Color mine = colors.get(colorIndex);
-				Color other = colors.get(otherIndex);
-				colors.set(colorIndex, other);
-				colors.set(otherIndex, mine);
-				saveColors();
-			}
-		}
-	}
-
-	/** index == -1 means put it at index 0 and shift all others down. */
-	public void pickColor(int index) {
-		Color color = colors.get(index == -1 ? selectedColor : index);
-		SwingUtilities.invokeLater(() ->
-		{
-			RuneliteColorPicker colorPicker = colorPickerManager.create(client,
-				color != null ? color : Color.decode("#FFFFFF"), "Item color", true);
-			colorPicker.setOnClose(c -> {
-				if (index == -1) {
-					for (int i = 9; i > 0; i--) {
-						colors.set(i, colors.get(i - 1));
-					}
-				}
-				colors.set(index == -1 ? 0 : index, c);
-				saveColors();
-			});
-			colorPicker.setVisible(true);
-		});
-	}
-
+    // Save the colors to the file
 	private void saveColors()
 	{
+        ArrayList<Color> colors = new ArrayList<>();
+        for (ColorToolbarButton button : colorPalette){
+            if (button.getColor() != null) {
+                colors.add(button.getColor());
+            }
+        }
 		configManager.setConfiguration("rspaint", "drawColors", gson.toJson(colors));
 	}
 
+    // Do this every tick
 	@Subscribe public void onClientTick(ClientTick e) {
 		if (!dDown && !eDown && !drawing && !erasing || client.isMenuOpen()) return;
 
-		int x = client.getMouseCanvasPosition().getX();
-		int y = client.getMouseCanvasPosition().getY();
-		for (int i = 0; i < buttons.size(); i++)
-		{
-			Rectangle r = toolbarButtonClickbox(i);
-			if (r.contains(x, y)) {
-				client.setMenuEntries(Arrays.stream(client.getMenuEntries()).filter(me -> me.getType() == MenuAction.CANCEL).collect(Collectors.toList()).toArray(new MenuEntry[]{}));
-				buttons.get(i).addMenuEntries();
-				return;
-			}
-		}
+        Color selectedColor = Color.WHITE;
+
+        // If a new color has been requested, add it to the list and make it active
+        if (newColorToolbarButton.getNewColor() != null){
+            colorPalette.remove(colorPalette.size() - 1);
+            for (ColorToolbarButton button : colorPalette){
+                button.setIndex(button.getIndex() + 1);
+                button.setSelected(false);
+            }
+            ColorToolbarButton buttonToAdd = new ColorToolbarButton(1, newColorToolbarButton.getNewColor());
+            buttonToAdd.setSelected(true);
+            colorPalette.add(0, buttonToAdd);
+            newColorToolbarButton.setNewColor(null);
+        }
+
+        // Add menu entries
+        if (newColorToolbarButton.mouseOver(client)) {
+            client.createMenuEntry(-1).setOption("New color").onClick(me -> pickColor(newColorToolbarButton));
+
+        }
+
+        // For each of the buttons
+        for (ColorToolbarButton button : colorPalette){
+            if (button.mouseOver(client)){
+                client.setMenuEntries(
+                        Arrays.stream(
+                                client.getMenuEntries()
+                        ).filter(
+                                me -> me.getType() == MenuAction.CANCEL
+                        ).collect(Collectors.toList()
+                        ).toArray(new MenuEntry[]{})
+                );
+
+                client.createMenuEntry(1).setOption(ColorUtil.wrapWithColorTag("Select color", button.getColor())).onClick(me -> {
+                    button.setSelected(true);
+                });
+            }
+            selectedColor = button.isSelected() ? button.getColor() : Color.WHITE;
+        }
+
 		if ((dDown || eDown) && Arrays.stream(client.getMenuEntries()).anyMatch(entry -> entry.getType() == MenuAction.WALK)) {
-			client.createMenuEntry(-1).setOption(dDown ? ColorUtil.wrapWithColorTag("Draw", colors.get(selectedColor)) : "Erase").setType(MenuAction.CC_OP);
-			drawable = true;
+			client.createMenuEntry(-1).setOption(dDown ? ColorUtil.wrapWithColorTag("Draw", selectedColor) : "Erase").setType(MenuAction.CC_OP);
+			this.drawable = true;
 		} else {
-			drawable = false;
+			this.drawable = false;
 		}
-//		System.out.println(Arrays.stream(client.getMapRegions()).boxed().collect(Collectors.toList()));
 	}
+
+    public void pickColor(NewColorToolbarButton button){
+        SwingUtilities.invokeLater(() ->
+        {
+            RuneliteColorPicker colorPicker = colorPickerManager.create(client, Color.decode("#FFFFFF"),
+                    "Select color", true);
+            colorPicker.setOnClose(button::setNewColor);
+            colorPicker.setVisible(true);
+        });
+    }
 
 	private pf projectToScreen(float subx, float suby, int x0, int y0, int x1, int y1, int x2, int y2, int x3, int y3)
 	{
@@ -372,20 +346,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return sub;
 	}
 
-//	@RequiredArgsConstructor
-//	static class RegionStrokes {
-//		final List<Stroke> strokes;
-//		final Collection<Integer> bonusRegions;
-//	}
-//
 	@Subscribe public void onGameStateChanged(GameStateChanged e) {
 		if (e.getGameState() == GameState.LOGGED_IN) return;
 
 		int[] mapRegions = client.getMapRegions();
 		if (mapRegions != null) loadStrokes(mapRegions);
 	}
-
-	Map<Integer, List<Stroke>> strokesByRegion = new HashMap<>();
 
 	void loadStrokes(int[] regions) {
 		Set<Integer> loadedRegions = strokesByRegion.keySet();
@@ -546,49 +512,34 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return dot(sub(a, b), sub(a, b));
 	}
 
-	private Rectangle toolbarButtonVisibleBounds(int i) {
-		Rectangle r = toolbarButtonClickbox(i);
-		r.grow(-1, -1);
-		return r;
-	}
-
-	private Rectangle toolbarButtonClickbox(int i) {
-		return new Rectangle(2, 40 + 20 * i, 16, 16);
-	}
-
-	private int getMousedOverToolbarButton(int mx, int my) {
-		for (int i = 0; i < 10; i++)
-		{
-			Rectangle rectangle = toolbarButtonClickbox(i);
-			if (rectangle.contains(mx, my)) {
-				return i;
-			}
-		}
-		return -1;
-	}
-
-	boolean dDown = false; // draw keybind is held.
-	boolean drawing = false; // mouse is down and drawing.
-	boolean eDown = false; // erase keybind is held.
-	boolean erasing = false; // mouse is down and erasing.
-	boolean drawable = false; // last menu entries contained WALK.
-
-	int toolbarButtonBeingDraggedIndex = -1;
-
 	@Override
 	public MouseEvent mousePressed(MouseEvent e)
 	{
 		if (e.getButton() != MouseEvent.BUTTON1 || client.isMenuOpen()) return e;
 
-		toolbarButtonBeingDraggedIndex = -1;
-		for (int i = 0; i < buttons.size(); i++) {
-			if (toolbarButtonClickbox(i).contains(e.getX(), e.getY())) {
-				toolbarButtonBeingDraggedIndex = i;
-				return e;
-			}
-		}
+        if (newColorToolbarButton.mouseOver(client)){
+            pickColor(newColorToolbarButton);
+        }
 
-		if (drawable) {
+        boolean anyButtonMouseover = false;
+        // Update selection state
+        for (ColorToolbarButton button : colorPalette){
+            if (button.mouseOver(client)){
+                anyButtonMouseover = true;
+            }
+        }
+        for (ColorToolbarButton button : colorPalette){
+            if (button.mouseOver(client)){
+                button.setSelected(true);
+            }
+            else{
+                if (anyButtonMouseover) {
+                    button.setSelected(false);
+                }
+            }
+        }
+
+		if (this.drawable) {
 			if (dDown) drawing = true;
 			else if (eDown) erasing = true;
 		}
@@ -601,67 +552,80 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	{
 		if (e.getButton() != MouseEvent.BUTTON1) return e;
 
-		int i = getMousedOverToolbarButton(e.getX(), e.getY());
-		if (i != -1 && toolbarButtonBeingDraggedIndex != -1) {
-			buttons.get(i).onDrag(buttons.get(toolbarButtonBeingDraggedIndex));
-		}
+        // Get the currently selected button
+        ColorToolbarButton selectedButton = null;
+        for  (ColorToolbarButton button : colorPalette){
+            if (button.isSelected()) {
+                selectedButton = button;
+            }
+        }
+        // If you've dragged the mouse onto an unselected color, reorder them
+        for  (ColorToolbarButton button : colorPalette){
+            if (selectedButton != null && button.mouseOver(client)) {
+                if (!button.isSelected()){
+                    button.onDrag(selectedButton);
+                }
+            }
+        }
 
+        // Stop drawing
 		drawing = false;
 		erasing = false;
 		return e;
 	}
 
+    // Toggle draw mode
 	@Override
 	public void keyPressed(KeyEvent e)
 	{
 		if (config.drawKeybind().matches(e)) {
-			dDown = true;
+            dDown = dDown ?  false : true;
+            eDown = false;
 		} else if (config.eraseKeybind().matches(e)) {
-			eDown = true;
+			eDown = eDown ? false : true;
+            dDown = false;
 		}
 	}
 
-	@Override
-	public void keyReleased(KeyEvent e)
-	{
-		if (config.drawKeybind().matches(e)) {
-			dDown = false;
-		} else if (config.eraseKeybind().matches(e)) {
-			eDown = false;
-		}
-	}
+    // Draws the color palette
+    public void drawPalette(){
+        for (ColorToolbarButton button : colorPalette){
+            button.draw(graphics, client);
+        }
+    }
 
-	@Subscribe public void onFocusChanged(FocusChanged e) {
-		if (!e.isFocused()) {
-			dDown = false;
-			eDown = false;
-			drawing = false;
-			erasing = false;
-		}
-	}
-
-	@Override public void keyTyped(KeyEvent e) { }
-	@Override public MouseEvent mouseClicked(MouseEvent e) { return e; }
-	@Override public MouseEvent mouseEntered(MouseEvent e) { return e; }
-	@Override public MouseEvent mouseExited(MouseEvent e) { return e; }
-	@Override public MouseEvent mouseDragged(MouseEvent e) { return e; }
-	@Override public MouseEvent mouseMoved(MouseEvent e) { return e; }
-
+    // Initialize buttons and get config info
 	public void startUp() {
 		String configuration = configManager.getConfiguration("rspaint", "drawColors");
+
+        List<Color> colorsFromConfig;
+
 		if (configuration != null)
 		{
-			List<Color> colorsFromConfig = gson.fromJson(configuration, new TypeToken<List<Color>>() {}.getType());
+            // Init colors from config
+			colorsFromConfig = gson.fromJson(configuration, new TypeToken<List<Color>>() {}.getType());
+
+            // Fill in any empties
 			for (int i = colorsFromConfig.size(); i < 10; i++) {
 				colorsFromConfig.add(null);
 			}
-			this.colors = colorsFromConfig;
+
+            // Assign colors to buttons
+            for (int i = 0; i < colorsFromConfig.size(); i++){
+                colorPalette.add(new ColorToolbarButton(i + 1, colorsFromConfig.get(i)));
+            }
+
 		} else {
-			colors = new ArrayList<>();
-			colors.add(Color.LIGHT_GRAY);
-			for (int i = 0; i < 9; i++) {
-				colors.add(null);
-			}
+            // No config available? Make one.
+            colorsFromConfig = new ArrayList<Color>();
+            colorsFromConfig.add(Color.LIGHT_GRAY);
+            for (int i = 0; i < 9; i++) {
+                colorsFromConfig.add(null);
+            }
+            // Assign colors to buttons
+            for (int i = 0; i < colorsFromConfig.size(); i++){
+                colorPalette.add(new ColorToolbarButton(i + 1, colorsFromConfig.get(i)));
+            }
 			saveColors();
 		}
 	}
