@@ -3,6 +3,7 @@ package com.rspaint;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import lombok.RequiredArgsConstructor;
+import net.runelite.api.Constants;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
@@ -134,6 +135,19 @@ public interface RsPaintConfig extends Config
 	default boolean scaleWidthWithZoom()
 	{
 		return true;
+	}
+
+	@Range(min = 0, max = Constants.EXTENDED_SCENE_SIZE)
+	@ConfigItem(
+		keyName = "renderDistance",
+		name = "Render distance",
+		description = "Strokes show only on tiles that are up to this many tiles from the camera, like Draw Distance in the GPU plugin. At 0, strokes show on all loaded tiles.",
+		section = renderingSection,
+		position = 5
+	)
+	default int renderDistance()
+	{
+		return 0;
 	}
 
 	/** How a stroke connects its points on the screen. It changes only the drawing, not the stored points. */

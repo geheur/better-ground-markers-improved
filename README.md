@@ -9,6 +9,8 @@ While you draw or erase, a left click draws or erases, and does not move your ch
 
 A line shows only on the floor where you drew it. If you go up or down stairs, you see the lines of the new floor. Lines that you drew before floors existed in the plugin show on the ground floor.
 
+If the GPU plugin loads the ground past the loading lines, lines show on that ground too.
+
 To undo your last line or erase, press the undo key (default `ctrl-z`) while you draw or erase. To redo it, press the redo key (default `ctrl-y`). One erase drag undoes as one change. Undo goes back 100 changes. If you are in a party, your party members see the undo and the redo too. Reset canvas deletes the undo history.
 
 The toolbar has 20 color slots, a button that resets the palette, and buttons that change the stroke size. The toolbar shows only while you draw or erase. Colors can be transparent. Use the Rendering settings to change how strokes look on your screen.

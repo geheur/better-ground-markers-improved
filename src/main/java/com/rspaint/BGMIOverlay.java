@@ -33,7 +33,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.swing.SwingUtilities;
@@ -42,6 +41,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.Constants;
 import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
@@ -303,9 +303,55 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	/** Returns the screen position of the point with the current camera, or null if its tile is not on the screen. */
 	private pf toScreen(WorldView worldView, StrokePoint p)
 	{
-		LocalPoint lp = LocalPoint.fromWorld(worldView, p.getX(), p.getY());
+		LocalPoint lp = loadedLocalPoint(worldView, p.getX(), p.getY(), worldView.getPlane());
 		Polygon poly = lp != null ? Perspective.getCanvasTilePoly(client, lp) : null;
 		return poly != null ? projectToScreen(p.getSubx(), p.getSuby(), poly) : null;
+	}
+
+	/**
+	 * Returns how many tiles past each edge of the scene the client loaded. The scene edge is the loading line.
+	 * The GPU plugin can load an extended scene: up to 40 more tiles on each side of the top-level scene, where the game
+	 * also draws the ground. Without it, this is 0.
+	 */
+	private int extendedBorder(WorldView worldView)
+	{
+		if (!worldView.isTopLevel() || client.getExpandedMapLoading() <= 0)
+		{
+			return 0;
+		}
+		return (Constants.EXTENDED_SCENE_SIZE - Constants.SCENE_SIZE) / 2;
+	}
+
+	/**
+	 * Returns the local point of the center of the world tile, or null if the client did not load the tile.
+	 * Unlike LocalPoint.fromWorld, this also works for the tiles of the extended scene, past the loading line.
+	 * Perspective.getCanvasTilePoly accepts those points.
+	 */
+	private LocalPoint loadedLocalPoint(WorldView worldView, int worldX, int worldY, int plane)
+	{
+		int sceneX = worldX - worldView.getBaseX();
+		int sceneY = worldY - worldView.getBaseY();
+		if (sceneX >= 0 && sceneY >= 0 && sceneX < worldView.getSizeX() && sceneY < worldView.getSizeY())
+		{
+			return LocalPoint.fromScene(sceneX, sceneY, worldView);
+		}
+
+		int border = extendedBorder(worldView);
+		if (border == 0 || plane < 0 || plane >= Constants.MAX_Z)
+		{
+			return null;
+		}
+		int extendedX = sceneX + border;
+		int extendedY = sceneY + border;
+		Tile[][][] extendedTiles = worldView.getScene().getExtendedTiles();
+		if (extendedTiles == null || extendedX < 0 || extendedY < 0
+			|| extendedX >= extendedTiles[plane].length || extendedY >= extendedTiles[plane][extendedX].length
+			|| extendedTiles[plane][extendedX][extendedY] == null)
+		{
+			// The tile is outside the extended scene, or the client did not load it.
+			return null;
+		}
+		return LocalPoint.fromScene(sceneX, sceneY, worldView);
 	}
 
 	// The stored width of new strokes. See screenWidth for the width on the screen.
@@ -322,6 +368,21 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	// If false, strokes are drawn fully opaque, also when their color is transparent. Set at the start of each frame.
 	private boolean transparentStrokes = true;
+
+	// The Render distance setting in tiles (0 is no limit), and the scene tile of the camera. Set at the start of each frame.
+	private int renderDistance = 0;
+	private int cameraTileX, cameraTileY;
+
+	/**
+	 * Returns true if the world tile is in the render distance. Like the GPU plugin draw distance, the area is a square
+	 * around the tile of the camera.
+	 */
+	private boolean isInRenderDistance(WorldView worldView, int worldX, int worldY)
+	{
+		return renderDistance == 0
+			|| Math.abs(worldX - worldView.getBaseX() - cameraTileX) <= renderDistance
+			&& Math.abs(worldY - worldView.getBaseY() - cameraTileY) <= renderDistance;
+	}
 
 	/** Returns the width on the screen of a stroke with this stored width. It is never less than 1 pixel. */
 	private float screenWidth(double width)
@@ -727,11 +788,29 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		if (mapRegions != null) loadStrokes(mapRegions);
 	}
 
+	// How many regions around the scene also load their strokes. One region covers the extended scene past the
+	// loading line (40 tiles), and lets a stroke that starts just outside it still show.
+	private static final int NEARBY_REGIONS = 1;
+
 	Map<Integer, List<Stroke>> strokesByRegion = new HashMap<>();
 
 	void loadStrokes(int[] regions) {
 		Set<Integer> loadedRegions = strokesByRegion.keySet();
-		Set<Integer> clientRegions = Arrays.stream(regions).boxed().collect(Collectors.toSet());
+		// Also keep the nearby regions, so the strokes that render draws from them are not read from the config again.
+		Set<Integer> clientRegions = new HashSet<>();
+		int margin = NEARBY_REGIONS;
+		for (int region : regions)
+		{
+			int regionX = region >> 8;
+			int regionY = region & 0xFF;
+			for (int x = Math.max(0, regionX - margin); x <= Math.min(0xFF, regionX + margin); x++)
+			{
+				for (int y = Math.max(0, regionY - margin); y <= Math.min(0xFF, regionY + margin); y++)
+				{
+					clientRegions.add(x << 8 | y);
+				}
+			}
+		}
 		List<Integer> regionsToUnload = new ArrayList<>(loadedRegions);
 		regionsToUnload.removeAll(clientRegions);
 		for (Integer region : regionsToUnload)
@@ -884,6 +963,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			// Each stroke is one path that is drawn one time, so the parts of a stroke that cross do not get darker.
 			// Each new stroke is drawn over the older strokes, so the colors of different strokes mix.
 			// This is true for the opacity of the stroke color and for the opacity of all strokes.
+			renderDistance = Math.max(0, config.renderDistance());
+			cameraTileX = (int) Math.floor(client.getCameraFpX() / Perspective.LOCAL_TILE_SIZE);
+			cameraTileY = (int) Math.floor(client.getCameraFpY() / Perspective.LOCAL_TILE_SIZE);
 			transparentStrokes = config.transparentStrokes();
 			if (transparentStrokes)
 			{
@@ -917,14 +999,17 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 	}
 
-	// The ids of the regions in the scene, and the scene base and size they are for.
-	// Made again only when the scene moves, so drawing does not make a new array on each frame.
+	// The ids of the regions in the scene, and the scene base, size and extended border they are for.
+	// Made again only when the scene moves or the border changes, so drawing does not make a new array on each frame.
 	private int[] sceneRegions = new int[0];
-	private int sceneRegionsBaseX, sceneRegionsBaseY, sceneRegionsSizeX, sceneRegionsSizeY;
+	private int sceneRegionsBaseX, sceneRegionsBaseY, sceneRegionsSizeX, sceneRegionsSizeY, sceneRegionsBorder;
 
 	/**
-	 * Returns the ids of all regions that have tiles in the scene. Do not change the array.
-	 * A stroke is stored under the region of its world tile. Inside an instance, that is a region of the instance
+	 * Returns the ids of all regions that have tiles in the scene, and of the NEARBY_REGIONS regions
+	 * around them. Do not change the array.
+	 * A stroke is stored under the region of the world tile of its first point. The nearby regions let a stroke that
+	 * starts outside the scene and goes into it still show. Its points outside the scene do not draw.
+	 * Inside an instance, the region of a stroke is a region of the instance
 	 * coordinates, but getMapRegions() gives the template regions. So the ids come from the scene base and size.
 	 * Outside an instance, they are the same regions as getMapRegions() gives.
 	 */
@@ -934,7 +1019,11 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		int baseY = worldView.getBaseY();
 		int sizeX = worldView.getSizeX();
 		int sizeY = worldView.getSizeY();
-		if (baseX == sceneRegionsBaseX && baseY == sceneRegionsBaseY && sizeX == sceneRegionsSizeX && sizeY == sceneRegionsSizeY)
+		int margin = NEARBY_REGIONS;
+		// Strokes also draw on the extended scene past the loading line, so its regions are in the list too.
+		int border = extendedBorder(worldView);
+		if (baseX == sceneRegionsBaseX && baseY == sceneRegionsBaseY && sizeX == sceneRegionsSizeX && sizeY == sceneRegionsSizeY
+			&& border == sceneRegionsBorder)
 		{
 			return sceneRegions;
 		}
@@ -942,17 +1031,18 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		sceneRegionsBaseY = baseY;
 		sceneRegionsSizeX = sizeX;
 		sceneRegionsSizeY = sizeY;
+		sceneRegionsBorder = border;
 
 		if (sizeX <= 0 || sizeY <= 0)
 		{
 			sceneRegions = new int[0];
 			return sceneRegions;
 		}
-		// The same formula as WorldPoint.getRegionID(). A region is 64 by 64 tiles.
-		int minRegionX = baseX >> 6;
-		int maxRegionX = (baseX + sizeX - 1) >> 6;
-		int minRegionY = baseY >> 6;
-		int maxRegionY = (baseY + sizeY - 1) >> 6;
+		// The same formula as WorldPoint.getRegionID(). A region is 64 by 64 tiles, and a region x or y is 0 to 255.
+		int minRegionX = Math.max(0, ((baseX - border) >> 6) - margin);
+		int maxRegionX = Math.min(0xFF, ((baseX + sizeX + border - 1) >> 6) + margin);
+		int minRegionY = Math.max(0, ((baseY - border) >> 6) - margin);
+		int maxRegionY = Math.min(0xFF, ((baseY + sizeY + border - 1) >> 6) + margin);
 		int[] regions = new int[(maxRegionX - minRegionX + 1) * (maxRegionY - minRegionY + 1)];
 		int i = 0;
 		for (int regionX = minRegionX; regionX <= maxRegionX; regionX++)
@@ -1141,7 +1231,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 		// Consecutive points are often on the same tile, so project each tile once.
 		int tileX = Integer.MIN_VALUE, tileY = Integer.MIN_VALUE;
-		boolean inScene = false;
 		Polygon poly = null;
 		for (StrokePoint p : s.pts)
 		{
@@ -1149,18 +1238,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			{
 				tileX = p.getX();
 				tileY = p.getY();
-				LocalPoint lp = LocalPoint.fromWorld(worldView, tileX, tileY);
-				inScene = lp != null;
-				poly = inScene ? Perspective.getCanvasTilePoly(client, lp) : null;
+				LocalPoint lp = isInRenderDistance(worldView, tileX, tileY) ? loadedLocalPoint(worldView, tileX, tileY, s.plane) : null;
+				poly = lp != null ? Perspective.getCanvasTilePoly(client, lp) : null;
 			}
 
-			if (!inScene)
-			{
-				continue;
-			}
 			if (poly == null)
 			{
-				// The tile is not on the screen, so the line breaks here.
+				// The tile is not in the scene, not in the render distance or not on the screen, so the line breaks here.
+				// Without the break, a stroke that leaves the scene and comes back is joined across the gap.
 				endRun(style);
 				continue;
 			}
