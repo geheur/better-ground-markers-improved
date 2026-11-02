@@ -31,6 +31,7 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
@@ -39,6 +40,7 @@ import javax.swing.SwingUtilities;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
@@ -64,6 +66,7 @@ import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.client.util.ColorUtil;
 
+@Slf4j
 @Singleton
 public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 {
@@ -75,6 +78,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	@Inject private ClientThread clientThread;
 	@Inject private PartyCanvasSync partySync;
 	@Inject private StrokeClock clock;
+	@Inject private StrokeStorage storage;
 
 	@Getter @Setter private volatile boolean showOwnStrokes = true;
 
@@ -748,13 +752,38 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return strokesByRegion.computeIfAbsent(regionId, this::readStrokes);
 	}
 
+	// Regions whose saved strokes cannot be read, for example because a newer version of the plugin saved them.
+	// These regions are not saved, so the saved strokes stay for the version that can read them.
+	private final Set<Integer> unreadableRegions = new HashSet<>();
+
 	private List<Stroke> readStrokes(int regionId) {
-		String conf = configManager.getConfiguration(RsPaintConfig.GROUP, "strokes_" + regionId);
-		List<Stroke> strokes = conf == null ? new ArrayList<>() : gson.fromJson(conf, new TypeToken<List<Stroke>>() {}.getType());
+		String key = "strokes_" + regionId;
+		String conf = configManager.getConfiguration(RsPaintConfig.GROUP, key);
+		unreadableRegions.remove(regionId);
+		if (conf == null) return new ArrayList<>();
+
+		StrokeStorage.Loaded loaded;
+		try
+		{
+			loaded = storage.read(conf);
+		}
+		catch (StrokeStorage.UnreadableStrokesException e)
+		{
+			log.warn("Cannot load the strokes of region {}: {}", regionId, e.getMessage());
+			unreadableRegions.add(regionId);
+			return new ArrayList<>();
+		}
+
+		List<Stroke> strokes = loaded.getStrokes();
 		for (int i = 0; i < strokes.size(); i++)
 		{
 			// Strokes saved before the draw order existed have order 0. They keep their saved order, under all newer strokes.
 			if (strokes.get(i).order <= 0) strokes.get(i).order = i + 1;
+		}
+		if (loaded.getVersion() < StrokeStorage.FORMAT_VERSION)
+		{
+			// Save the strokes again in the current format, so the old format is read only once.
+			configManager.setConfiguration(RsPaintConfig.GROUP, key, storage.write(strokes));
 		}
 		if (!strokes.isEmpty())
 		{
@@ -766,8 +795,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	void saveStrokes(int regionId) {
 		List<Stroke> strokes = strokesByRegion.get(regionId);
-		if (strokes == null) return;
-		configManager.setConfiguration(RsPaintConfig.GROUP, "strokes_" + regionId, gson.toJson(strokes));
+		if (strokes == null || unreadableRegions.contains(regionId)) return;
+		configManager.setConfiguration(RsPaintConfig.GROUP, "strokes_" + regionId, storage.write(strokes));
 	}
 
 	/**
