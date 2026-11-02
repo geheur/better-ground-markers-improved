@@ -9,16 +9,10 @@ import java.util.concurrent.ThreadLocalRandom;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import lombok.Value;
-import lombok.extern.slf4j.Slf4j;
-import net.runelite.api.ChatMessageType;
-import net.runelite.api.Client;
 import net.runelite.api.Constants;
-import net.runelite.api.GameState;
 import net.runelite.api.coords.WorldPoint;
-import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
-import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.input.KeyManager;
 import net.runelite.client.input.MouseManager;
 import net.runelite.client.plugins.Plugin;
@@ -27,17 +21,14 @@ import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 
-@Slf4j
 @PluginDescriptor(
 	name = "RsPaint",
-	description = "draw on the floor",
+	description = "Draw on the ground.",
 	tags = {"paint", "draw", "ground", "marker", "tile", "color", "art"}
 )
 public class RsPaintPlugin extends Plugin
 {
-	@Inject Client client;
 	@Provides RsPaintConfig provideConfig(ConfigManager configManager) { return configManager.getConfig(RsPaintConfig.class); }
-	@Inject RsPaintConfig config;
 	@Inject KeyManager keyManager;
 	@Inject MouseManager mouseManager;
 	@Inject BGMIOverlay bgmiOverlay;
@@ -79,7 +70,6 @@ public class RsPaintPlugin extends Plugin
 		mouseManager.unregisterMouseListener(bgmiOverlay);
 		keyManager.unregisterKeyListener(bgmiOverlay);
 		eventBus.unregister(bgmiOverlay);
-		overlayManager.remove(bgmiOverlay);
 
 		eventBus.unregister(partySync);
 		partySync.shutDown();
@@ -88,11 +78,6 @@ public class RsPaintPlugin extends Plugin
 		eventBus.unregister(panel);
 		panel.reset();
 		clientToolbar.removeNavigation(navigationButton);
-	}
-
-	@Subscribe
-	public void onGameStateChanged(GameStateChanged gameStateChanged)
-	{
 	}
 
 	@Value

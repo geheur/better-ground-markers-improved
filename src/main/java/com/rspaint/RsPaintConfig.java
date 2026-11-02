@@ -11,9 +11,12 @@ import net.runelite.client.config.Keybind;
 import net.runelite.client.config.Range;
 import net.runelite.client.config.Units;
 
-@ConfigGroup("rspaint")
+@ConfigGroup(RsPaintConfig.GROUP)
 public interface RsPaintConfig extends Config
 {
+	// Saved strokes, colors and the stroke size are in this group too, so it must not change.
+	String GROUP = "rspaint";
+
 	@ConfigItem(
 		keyName = "drawKeybind",
 		name = "Draw keybind",

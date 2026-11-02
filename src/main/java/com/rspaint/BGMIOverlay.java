@@ -22,6 +22,7 @@ import java.awt.geom.Ellipse2D;
 import java.awt.geom.Line2D;
 import java.awt.geom.Path2D;
 import java.awt.geom.Point2D;
+import java.lang.reflect.Type;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -39,7 +40,6 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 import net.runelite.api.Client;
-import net.runelite.api.Constants;
 import net.runelite.api.GameState;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
@@ -55,7 +55,6 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
-import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.input.KeyListener;
 import net.runelite.client.input.MouseListener;
 import net.runelite.client.ui.components.colorpicker.ColorPickerManager;
@@ -69,7 +68,6 @@ import net.runelite.client.util.ColorUtil;
 public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 {
 	@Inject Client client;
-	@Inject RsPaintPlugin plugin;
 	@Inject private RsPaintConfig config;
 	@Inject private ConfigManager configManager;
 	@Inject private Gson gson;
@@ -82,6 +80,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	static class pf extends Point2D.Float { pf(float x, float y) { super(x, y);} }
 	static pf pf(float x, float y) { return new pf(x, y); }
+
+	private static final Type COLOR_LIST_TYPE = new TypeToken<List<Color>>(){}.getType();
+
+	// Search order around the selected scene tile for the tile under the mouse.
+	private static final int[] TILE_X_OFFSETS = {0, 1, 1, 0, -1, -1, -1, 0, 1,
+		2, 2, 2, 1, 0, -1, -2, -2, -2, -2, -2, -1, 0, -1, 2, 2};
+	private static final int[] TILE_Y_OFFSETS = {0, 0, 1, 1, 1, 0, -1, -1, -1,
+		0, 1, 2, 2, 2, 2, 2, 1, 0, -1, -2, -2, -2, -2, -2, -1};
 
 	static final Color DEFAULT_COLOR = Color.LIGHT_GRAY;
 
@@ -303,10 +309,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	List<Color> colors = new ArrayList<>();
 	int selectedColor = 0;
 
-	Graphics2D graphics = null;
-
-	Point lastMouseCanvasPosition = null;
-
 	// If "Scale width with zoom" is on, a stroke has its stored width in screen pixels at this camera scale.
 	// 512 is the scale of the default zoom in fixed mode.
 	private static final float REFERENCE_SCALE = 512f;
@@ -326,7 +328,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	private void changeStrokeSize(int change)
 	{
 		strokeSize = Math.max(Stroke.MIN_WIDTH, Math.min(Stroke.MAX_WIDTH, strokeSize + change));
-		configManager.setConfiguration("rspaint", "strokeSize", strokeSize);
+		configManager.setConfiguration(RsPaintConfig.GROUP, "strokeSize", strokeSize);
 	}
 
 	// When the player holds down a stroke size button, the size starts to repeat after HOLD_DELAY_MS.
@@ -385,14 +387,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		this.graphics = graphics;
-		boolean debug = false;
-
 		// The camera scale changes when the player zooms. The ground tiles on the screen get larger and smaller with it.
 		widthScale = config.scaleWidthWithZoom() && client.getScale() > 0 ? client.getScale() / REFERENCE_SCALE : 1f;
 
-		int mx = client.getMouseCanvasPosition().getX();
-		int my = client.getMouseCanvasPosition().getY();
+		Point mouse = client.getMouseCanvasPosition();
+		int mx = mouse.getX();
+		int my = mouse.getY();
 
 		if (!drawing)
 		{
@@ -403,49 +403,30 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			currentErase = null;
 		}
 
-		// Ui hit test.
 		boolean showUi = eDown || dDown || drawing || erasing;
-		boolean overUi = false;
-		if (showUi) {
-			for (int i = 0; i < buttons.size(); i++) {
-				Rectangle r = toolbarButtonClickbox(i);
-				if (r.contains(mx, my)) {
-					overUi = true;
-					break;
-				}
-			}
-		}
+		boolean overUi = showUi && getMousedOverToolbarButton(mx, my) != -1;
 
-		// get tile.
-		Tile tile = client.getTopLevelWorldView().getSelectedSceneTile();
+		Tile tile = dDown || drawing ? client.getTopLevelWorldView().getSelectedSceneTile() : null;
 		pf ground = null;
 
 		if (tile != null)
 		{
-			int[] xdiffs = new int[]{0, 1, 1, 0, -1, -1, -1, 0, 1,
-				2, 2, 2, 1, 0, -1, -2, -2, -2, -2, -2, -1, 0, -1, 2, 2};
-			int[] ydiffs = new int[]{0, 0, 1, 1, 1, 0, -1, -1, -1,
-				0, 1, 2, 2, 2, 2, 2, 1, 0, -1, -2, -2, -2, -2, -2, -1};
 			Polygon poly = null;
 			int tilex = -1;
 			int tiley = -1;
-			for (int i = 0; i < xdiffs.length; i++)
+			for (int i = 0; i < TILE_X_OFFSETS.length; i++)
 			{
-				LocalPoint plus = tile.getLocalLocation().plus(xdiffs[i] * 128, ydiffs[i] * 128);
-//			System.out.println(plus);
+				LocalPoint plus = tile.getLocalLocation().plus(TILE_X_OFFSETS[i] * 128, TILE_Y_OFFSETS[i] * 128);
 				Polygon test = Perspective.getCanvasTilePoly(client, plus);
-				if (!overUi && debug && showUi) graphics.draw(test);
 				if (test != null && test.contains(mx, my))
 				{
-//				System.out.println("found matching polygon after " + i + " polygons");
 					poly = test;
-					tilex = tile.getWorldLocation().getX() + xdiffs[i];
-					tiley = tile.getWorldLocation().getY() + ydiffs[i];
+					tilex = tile.getWorldLocation().getX() + TILE_X_OFFSETS[i];
+					tiley = tile.getWorldLocation().getY() + TILE_Y_OFFSETS[i];
 					break;
 				}
 			}
 
-			// barycenter calculations
 			if (poly != null)
 			{
 				int
@@ -460,8 +441,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 				pf sub = getBarycentre(mx, my, x0, y0, x1, y1, x2, y2, x3, y3);
 				ground = projectToScreen(sub.x, sub.y, poly);
-
-//			if (sub.x > 1.05 || sub.x < -0.05 || sub.y > 1.05 || sub.y < -0.05) System.out.println("here " + sub.x + " " + sub.y);
 
 				if (drawing) {
 					int plane = client.getTopLevelWorldView().getPlane();
@@ -515,7 +494,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			}
 		}
 
-		lastMouseCanvasPosition = client.getMouseCanvasPosition();
 		return null;
 	}
 
@@ -529,7 +507,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				super.draw(g, r, mouseOver);
 			}
 			@Override public void addMenuEntries() {
-				client.createMenuEntry(-1).setOption("New color").onClick(me -> pickColor(-1));
+				client.getMenu().createMenuEntry(-1).setOption("New color").onClick(me -> pickColor(-1));
 			}
 		});
 		// Reset palette: a circular arrow.
@@ -598,14 +576,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	class ToolbarButton {
 		public void draw(Graphics2D g, Rectangle r, boolean mouseOver) {
-			if (mouseOver) {
-				g.setColor(Color.WHITE);
-				Rectangle r2 = new Rectangle(r);
-				r2.grow(1, 1);
-				g.draw(r);
-			} else {
-				g.setColor(Color.LIGHT_GRAY);
-			}
+			g.setColor(mouseOver ? Color.WHITE : Color.LIGHT_GRAY);
 			g.draw(r);
 		}
 
@@ -630,13 +601,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		@Override public void addMenuEntries() {
 			Color color = colors.get(colorIndex);
 			if (color != null) {
-				client.createMenuEntry(1).setOption(ColorUtil.wrapWithColorTag("Select color", color)).onClick(me -> {
-					selectedColor = colorIndex;
-				});
+				client.getMenu().createMenuEntry(1).setOption(ColorUtil.wrapWithColorTag("Select color", color)).onClick(me -> selectedColor = colorIndex);
 			}
-			client.createMenuEntry(1).setOption("Choose ").setTarget("new color").onClick(me -> {
-				pickColor(colorIndex);
-			});
+			client.getMenu().createMenuEntry(1).setOption("Choose ").setTarget("new color").onClick(me -> pickColor(colorIndex));
 		}
 
 		@Override public void onDrag(ToolbarButton b) {
@@ -651,14 +618,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 	}
 
-	/** index == -1 means put it at index 0, shift all others down, and select it. */
+	/** If index is -1, the new color goes in slot 0, the other colors move down one slot, and slot 0 becomes the selected color. */
 	public void pickColor(int index) {
 		Color color = colors.get(index == -1 ? selectedColor : index);
 		SwingUtilities.invokeLater(() ->
 		{
 			// The picker shows the opacity of the color too. Strokes keep the opacity of their color.
 			RuneliteColorPicker colorPicker = colorPickerManager.create(client,
-				color != null ? color : Color.decode("#FFFFFF"), "Item color", false);
+				color != null ? color : Color.WHITE, "Paint color", false);
 			colorPicker.setOnClose(c -> {
 				if (index == -1) {
 					for (int i = colors.size() - 1; i > 0; i--) {
@@ -676,7 +643,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	private void saveColors()
 	{
-		configManager.setConfiguration("rspaint", "drawColors", gson.toJson(colors));
+		configManager.setConfiguration(RsPaintConfig.GROUP, "drawColors", gson.toJson(colors));
 	}
 
 	@Subscribe public void onClientTick(ClientTick e) {
@@ -684,25 +651,20 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 		if (!dDown && !eDown && !drawing && !erasing || client.isMenuOpen()) return;
 
-		int x = client.getMouseCanvasPosition().getX();
-		int y = client.getMouseCanvasPosition().getY();
-		repeatHeldSizeButton(x, y);
-		for (int i = 0; i < buttons.size(); i++)
-		{
-			Rectangle r = toolbarButtonClickbox(i);
-			if (r.contains(x, y)) {
-				client.setMenuEntries(Arrays.stream(client.getMenuEntries()).filter(me -> me.getType() == MenuAction.CANCEL).collect(Collectors.toList()).toArray(new MenuEntry[]{}));
-				buttons.get(i).addMenuEntries();
-				return;
-			}
+		Point mouse = client.getMouseCanvasPosition();
+		repeatHeldSizeButton(mouse.getX(), mouse.getY());
+		int button = getMousedOverToolbarButton(mouse.getX(), mouse.getY());
+		if (button != -1) {
+			client.getMenu().setMenuEntries(Arrays.stream(client.getMenu().getMenuEntries()).filter(me -> me.getType() == MenuAction.CANCEL).toArray(MenuEntry[]::new));
+			buttons.get(button).addMenuEntries();
+			return;
 		}
-		if ((dDown || eDown) && Arrays.stream(client.getMenuEntries()).anyMatch(entry -> entry.getType() == MenuAction.WALK)) {
-			client.createMenuEntry(-1).setOption(dDown ? ColorUtil.wrapWithColorTag("Draw", selectedColor()) : "Erase").setType(MenuAction.CC_OP);
+		if ((dDown || eDown) && Arrays.stream(client.getMenu().getMenuEntries()).anyMatch(entry -> entry.getType() == MenuAction.WALK)) {
+			client.getMenu().createMenuEntry(-1).setOption(dDown ? ColorUtil.wrapWithColorTag("Draw", selectedColor()) : "Erase").setType(MenuAction.CC_OP);
 			drawable = true;
 		} else {
 			drawable = false;
 		}
-//		System.out.println(Arrays.stream(client.getMapRegions()).boxed().collect(Collectors.toList()));
 	}
 
 	/** Returns the screen position of a sub-tile position, with sub-pixel precision, in a new pf. */
@@ -733,10 +695,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	private pf getBarycentre(int mx, int my, int x0, int y0, int x1, int y1, int x2, int y2, int x3, int y3)
 	{
-		float tilesuby;
-		float tilesubx;
-		pf sub;
-		// triangle 013
+		// Try the triangle made by corners 0, 1, 3 first, then the one made by corners 1, 2, 3.
 		float
 			area13p = triangleArea(x1, y1, x3, y3, mx, my),
 			area03p = triangleArea(x0, y0, x3, y3, mx, my),
@@ -745,41 +704,18 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		float
 			swb0 = area13p / area013,
 			swb1 = area03p / area013,
-			swb3 = area01p / area013,
-			swbSum = swb0 + swb1 + swb3;
-//			System.out.println("sw triangle barycentric: " + swb0 + " " + swb1 + " " + swb3 + " (" + swbSum + ")");
-		if (swbSum > 1f)
+			swb3 = area01p / area013;
+		if (swb0 + swb1 + swb3 > 1f)
 		{
-			// try triangle 123
 			float
 				area23p = triangleArea(x2, y2, x3, y3, mx, my),
-				area31p = triangleArea(x3, y3, x1, y1, mx, my),
 				area12p = triangleArea(x1, y1, x2, y2, mx, my),
 				area123 = triangleArea(x1, y1, x2, y2, x3, y3);
-			float
-				neb1 = area23p / area123,
-				neb2 = area31p / area123,
-				neb3 = area12p / area123,
-				nebSum = neb1 + neb2 + neb3;
-//				System.out.println("ne triangle barycentric: " + neb1 + " " + neb2 + " " + neb3 + " (" + nebSum + ")");
-			tilesubx = 1 - neb3;
-			tilesuby = 1 - neb1;
+			return pf(1 - area12p / area123, 1 - area23p / area123);
 		}
-		else
-		{
-			tilesubx = swb1;
-			tilesuby = swb3;
-		}
-		sub = pf(tilesubx, tilesuby);
-		return sub;
+		return pf(swb1, swb3);
 	}
 
-//	@RequiredArgsConstructor
-//	static class RegionStrokes {
-//		final List<Stroke> strokes;
-//		final Collection<Integer> bonusRegions;
-//	}
-//
 	@Subscribe public void onGameStateChanged(GameStateChanged e) {
 		if (e.getGameState() == GameState.LOGGED_IN) return;
 
@@ -813,7 +749,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	}
 
 	private List<Stroke> readStrokes(int regionId) {
-		String conf = configManager.getConfiguration("rspaint", "strokes_" + regionId);
+		String conf = configManager.getConfiguration(RsPaintConfig.GROUP, "strokes_" + regionId);
 		List<Stroke> strokes = conf == null ? new ArrayList<>() : gson.fromJson(conf, new TypeToken<List<Stroke>>() {}.getType());
 		for (int i = 0; i < strokes.size(); i++)
 		{
@@ -831,7 +767,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	void saveStrokes(int regionId) {
 		List<Stroke> strokes = strokesByRegion.get(regionId);
 		if (strokes == null) return;
-		configManager.setConfiguration("rspaint", "strokes_" + regionId, gson.toJson(strokes));
+		configManager.setConfiguration(RsPaintConfig.GROUP, "strokes_" + regionId, gson.toJson(strokes));
 	}
 
 	/**
@@ -1262,8 +1198,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	private int getMousedOverToolbarButton(int mx, int my) {
 		for (int i = 0; i < buttons.size(); i++)
 		{
-			Rectangle rectangle = toolbarButtonClickbox(i);
-			if (rectangle.contains(mx, my)) {
+			if (toolbarButtonClickbox(i).contains(mx, my)) {
 				return i;
 			}
 		}
@@ -1419,24 +1354,19 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	public void startUp() {
 		showOwnStrokes = true;
 
-		Integer savedSize = configManager.getConfiguration("rspaint", "strokeSize", Integer.class);
+		Integer savedSize = configManager.getConfiguration(RsPaintConfig.GROUP, "strokeSize", Integer.class);
 		strokeSize = savedSize != null ? Math.max(Stroke.MIN_WIDTH, Math.min(Stroke.MAX_WIDTH, savedSize)) : Stroke.MIN_WIDTH;
 
-		String configuration = configManager.getConfiguration("rspaint", "drawColors");
-		if (configuration != null)
-		{
-			List<Color> colorsFromConfig = gson.fromJson(configuration, new TypeToken<List<Color>>() {}.getType());
-			if (isOldDefaultPalette(colorsFromConfig)) {
-				useDefaultPalette();
-				return;
-			}
-			for (int i = colorsFromConfig.size(); i < COLOR_SLOTS; i++) {
-				colorsFromConfig.add(null);
-			}
-			this.colors = colorsFromConfig;
-		} else {
+		String configuration = configManager.getConfiguration(RsPaintConfig.GROUP, "drawColors");
+		List<Color> saved = configuration != null ? gson.fromJson(configuration, COLOR_LIST_TYPE) : null;
+		if (saved == null || isOldDefaultPalette(saved)) {
 			useDefaultPalette();
+			return;
 		}
+		while (saved.size() < COLOR_SLOTS) {
+			saved.add(null);
+		}
+		colors = saved;
 	}
 
 	private void useDefaultPalette() {
