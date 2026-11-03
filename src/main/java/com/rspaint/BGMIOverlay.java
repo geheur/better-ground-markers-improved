@@ -323,6 +323,16 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	}
 
 	/**
+	 * Returns how many tiles past each edge of the scene the GPU plugin loads, which can be less than extendedBorder.
+	 * The GPU plugin loads getExpandedMapLoading() zones, and a zone is 8 tiles. Use it only for the region range.
+	 * The extended tile array is always laid out with the extendedBorder offset.
+	 */
+	private int loadedBorder(WorldView worldView)
+	{
+		return Math.min(extendedBorder(worldView), client.getExpandedMapLoading() * Constants.CHUNK_SIZE);
+	}
+
+	/**
 	 * Returns the local point of the center of the world tile, or null if the client did not load the tile.
 	 * Unlike LocalPoint.fromWorld, this also works for the tiles of the extended scene, past the loading line.
 	 * Perspective.getCanvasTilePoly accepts those points.
@@ -782,42 +792,35 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	}
 
 	@Subscribe public void onGameStateChanged(GameStateChanged e) {
-		if (e.getGameState() == GameState.LOGGED_IN) return;
+		// The scene base is final only after the scene loads.
+		if (e.getGameState() != GameState.LOGGED_IN) return;
 
-		int[] mapRegions = client.getMapRegions();
-		if (mapRegions != null) loadStrokes(mapRegions);
+		WorldView worldView = client.getTopLevelWorldView();
+		// Keep the same regions that drawing reads, so drawing does not read a region from the config again.
+		if (worldView != null) loadStrokes(sceneRegions(worldView));
 	}
 
-	// How many regions around the scene also load their strokes. One region covers the extended scene past the
-	// loading line (40 tiles), and lets a stroke that starts just outside it still show.
+	// How many regions around the scene and its extended border also load and draw their strokes.
+	// One region lets a stroke that starts just outside the scene still show.
 	private static final int NEARBY_REGIONS = 1;
 
 	Map<Integer, List<Stroke>> strokesByRegion = new HashMap<>();
 
+	/** Loads the strokes of the regions, and unloads the strokes of all other regions. */
 	void loadStrokes(int[] regions) {
 		Set<Integer> loadedRegions = strokesByRegion.keySet();
-		// Also keep the nearby regions, so the strokes that render draws from them are not read from the config again.
-		Set<Integer> clientRegions = new HashSet<>();
-		int margin = NEARBY_REGIONS;
+		Set<Integer> keptRegions = new HashSet<>();
 		for (int region : regions)
 		{
-			int regionX = region >> 8;
-			int regionY = region & 0xFF;
-			for (int x = Math.max(0, regionX - margin); x <= Math.min(0xFF, regionX + margin); x++)
-			{
-				for (int y = Math.max(0, regionY - margin); y <= Math.min(0xFF, regionY + margin); y++)
-				{
-					clientRegions.add(x << 8 | y);
-				}
-			}
+			keptRegions.add(region);
 		}
 		List<Integer> regionsToUnload = new ArrayList<>(loadedRegions);
-		regionsToUnload.removeAll(clientRegions);
+		regionsToUnload.removeAll(keptRegions);
 		for (Integer region : regionsToUnload)
 		{
 			strokesByRegion.remove(region);
 		}
-		List<Integer> regionsToLoad = new ArrayList<>(clientRegions);
+		List<Integer> regionsToLoad = new ArrayList<>(keptRegions);
 		// Keep the regions that are loaded already, so undo, redo and the party sync keep the same Stroke objects.
 		regionsToLoad.removeAll(loadedRegions);
 		for (Integer region : regionsToLoad)
@@ -1012,6 +1015,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	 * Inside an instance, the region of a stroke is a region of the instance
 	 * coordinates, but getMapRegions() gives the template regions. So the ids come from the scene base and size.
 	 * Outside an instance, they are the same regions as getMapRegions() gives.
+	 * loadStrokes keeps these regions in memory when the scene loads.
 	 */
 	private int[] sceneRegions(WorldView worldView)
 	{
@@ -1021,7 +1025,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		int sizeY = worldView.getSizeY();
 		int margin = NEARBY_REGIONS;
 		// Strokes also draw on the extended scene past the loading line, so its regions are in the list too.
-		int border = extendedBorder(worldView);
+		int border = loadedBorder(worldView);
 		if (baseX == sceneRegionsBaseX && baseY == sceneRegionsBaseY && sizeX == sceneRegionsSizeX && sizeY == sceneRegionsSizeY
 			&& border == sceneRegionsBorder)
 		{
