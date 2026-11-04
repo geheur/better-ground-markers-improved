@@ -4,12 +4,11 @@ import com.google.gson.Gson;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
-import com.google.gson.reflect.TypeToken;
 import com.rspaint.PartyCanvasSync.SyncedStroke;
 import com.rspaint.RsPaintPlugin.Stroke;
 import com.rspaint.RsPaintPlugin.StrokePoint;
-import java.lang.reflect.Type;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -36,9 +35,6 @@ class StrokeStorage
 
 	// The longest text that read() accepts. Real text is much shorter.
 	private static final int MAX_TEXT_LENGTH = 32 * 1024 * 1024;
-
-	private static final Type VERSION_1_STROKES = new TypeToken<List<Stroke>>(){}.getType();
-	private static final Type VERSION_2_STROKES = new TypeToken<List<SyncedStroke>>(){}.getType();
 
 	private final Gson gson;
 
@@ -115,7 +111,7 @@ class StrokeStorage
 					throw new UnreadableStrokesException("The text has no stroke list.");
 				}
 				// Builds of this branch before version 2 saved version 1 strokes in {"version":1,"strokes":[...]}.
-				strokes = version == 1 ? readVersion1(list) : gson.fromJson(list, VERSION_2_STROKES);
+				strokes = version == 1 ? readVersion1(list) : Arrays.asList(gson.fromJson(list, SyncedStroke[].class));
 			}
 			else
 			{
@@ -161,11 +157,11 @@ class StrokeStorage
 	 */
 	private List<SyncedStroke> readVersion1(JsonElement list)
 	{
-		List<Stroke> strokes = gson.fromJson(list, VERSION_1_STROKES);
+		Stroke[] strokes = gson.fromJson(list, Stroke[].class);
 		List<SyncedStroke> result = new ArrayList<>();
-		for (int i = 0; i < strokes.size(); i++)
+		for (int i = 0; i < strokes.length; i++)
 		{
-			Stroke stroke = strokes.get(i);
+			Stroke stroke = strokes[i];
 			if (stroke == null || stroke.color == null || stroke.pts == null || stroke.pts.isEmpty() || stroke.pts.contains(null))
 			{
 				continue;

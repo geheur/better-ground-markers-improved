@@ -1,7 +1,6 @@
 package com.rspaint;
 
 import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
 import com.rspaint.RsPaintConfig.LineStyle;
 import com.rspaint.RsPaintPlugin.Stroke;
 import com.rspaint.RsPaintPlugin.StrokeClock;
@@ -22,7 +21,6 @@ import java.awt.geom.Ellipse2D;
 import java.awt.geom.Line2D;
 import java.awt.geom.Path2D;
 import java.awt.geom.Point2D;
-import java.lang.reflect.Type;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -84,8 +82,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	static class pf extends Point2D.Float { pf(float x, float y) { super(x, y);} }
 	static pf pf(float x, float y) { return new pf(x, y); }
-
-	private static final Type COLOR_LIST_TYPE = new TypeToken<List<Color>>(){}.getType();
 
 	// Search order around the selected scene tile for the tile under the mouse.
 	private static final int[] TILE_X_OFFSETS = {0, 1, 1, 0, -1, -1, -1, 0, 1,
@@ -1483,7 +1479,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		strokeSize = savedSize != null ? Math.max(Stroke.MIN_WIDTH, Math.min(Stroke.MAX_WIDTH, savedSize)) : Stroke.MIN_WIDTH;
 
 		String configuration = configManager.getConfiguration(RsPaintConfig.GROUP, "drawColors");
-		List<Color> saved = configuration != null ? gson.fromJson(configuration, COLOR_LIST_TYPE) : null;
+		Color[] savedArray = configuration != null ? gson.fromJson(configuration, Color[].class) : null;
+		List<Color> saved = savedArray != null ? new ArrayList<>(Arrays.asList(savedArray)) : null;
 		if (saved == null || isOldDefaultPalette(saved)) {
 			useDefaultPalette();
 			return;
