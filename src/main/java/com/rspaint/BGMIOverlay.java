@@ -1068,6 +1068,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	// The strokes to draw in this frame. Reused, so drawing does not make a new list on each frame.
 	private final List<Stroke> visibleStrokes = new ArrayList<>();
+	// A frame draws at most this many points. If the shown strokes have more, the oldest strokes do not draw.
+	// Each party member keeps at most 100,000 points, but a big party can have more in all. This keeps the frame time bounded.
+	private static final int MAX_DRAWN_POINTS = 200_000;
 
 	private void drawStrokes(Graphics2D graphics, WorldView worldView, int[] regions, int mx, int my, LineStyle style)
 	{
@@ -1095,9 +1098,17 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		visibleStrokes.sort(Stroke.DRAW_ORDER);
 		try
 		{
-			for (Stroke s : visibleStrokes)
+			// Count from the newest stroke back, so that the newest strokes draw if there are too many points.
+			int first = visibleStrokes.size();
+			int points = 0;
+			while (first > 0 && points + visibleStrokes.get(first - 1).pts.size() <= MAX_DRAWN_POINTS)
 			{
-				drawStroke(graphics, worldView, s, style);
+				first--;
+				points += visibleStrokes.get(first).pts.size();
+			}
+			for (int i = first; i < visibleStrokes.size(); i++)
+			{
+				drawStroke(graphics, worldView, visibleStrokes.get(i), style);
 			}
 		}
 		finally
