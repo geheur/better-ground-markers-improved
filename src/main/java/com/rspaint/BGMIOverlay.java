@@ -856,16 +856,15 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			return new ArrayList<>();
 		}
 
-		List<Stroke> strokes = loaded.getStrokes();
-		for (int i = 0; i < strokes.size(); i++)
+		List<Stroke> strokes = new ArrayList<>();
+		for (PartyCanvasSync.SyncedStroke synced : loaded.getStrokes())
 		{
-			// Strokes saved before the draw order existed have order 0. They keep their saved order, under all newer strokes.
-			if (strokes.get(i).order <= 0) strokes.get(i).order = i + 1;
+			strokes.add(PartyCanvasSync.fromSynced(synced));
 		}
 		if (loaded.getVersion() < StrokeStorage.FORMAT_VERSION)
 		{
 			// Save the strokes again in the current format, so the old format is read only once.
-			configManager.setConfiguration(RsPaintConfig.GROUP, key, storage.write(strokes));
+			configManager.setConfiguration(RsPaintConfig.GROUP, key, storage.write(loaded.getStrokes()));
 		}
 		if (!strokes.isEmpty())
 		{
@@ -878,7 +877,15 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	void saveStrokes(int regionId) {
 		List<Stroke> strokes = strokesByRegion.get(regionId);
 		if (strokes == null || unreadableRegions.contains(regionId)) return;
-		configManager.setConfiguration(RsPaintConfig.GROUP, "strokes_" + regionId, storage.write(strokes));
+		List<PartyCanvasSync.SyncedStroke> synced = new ArrayList<>();
+		for (Stroke stroke : strokes)
+		{
+			if (!stroke.pts.isEmpty())
+			{
+				synced.add(PartyCanvasSync.toSynced(stroke, stroke.pts));
+			}
+		}
+		configManager.setConfiguration(RsPaintConfig.GROUP, "strokes_" + regionId, storage.write(synced));
 	}
 
 	/**

@@ -1,12 +1,6 @@
 package com.rspaint;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParseException;
 import com.rspaint.PartyCanvasSync.SyncedStroke;
-import com.rspaint.RsPaintPlugin.Stroke;
-import com.rspaint.RsPaintPlugin.StrokePoint;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Container;
@@ -87,7 +81,7 @@ public class RsPaintPanel extends PluginPanel
 	@Inject private PartyService partyService;
 	@Inject private PartyCanvasSync partySync;
 	@Inject private BGMIOverlay overlay;
-	@Inject private DrawingJson drawingJson;
+	@Inject private StrokeStorage storage;
 
 	private final JTextArea partyStatus = new WrappingTextArea();
 	private final JPanel memberList = new JPanel(new DynamicGridLayout(0, 1, 0, 0));
@@ -383,7 +377,7 @@ public class RsPaintPanel extends PluginPanel
 
 		try
 		{
-			Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(drawingJson.write(strokes)), null);
+			Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(storage.write(strokes)), null);
 		}
 		catch (IllegalStateException e)
 		{
@@ -424,9 +418,9 @@ public class RsPaintPanel extends PluginPanel
 		List<SyncedStroke> strokes;
 		try
 		{
-			strokes = drawingJson.read(text.trim());
+			strokes = storage.read(text.trim()).getStrokes();
 		}
-		catch (DrawingJson.InvalidDrawingException e)
+		catch (StrokeStorage.UnreadableStrokesException e)
 		{
 			log.debug("Could not import drawings from the clipboard", e);
 			JOptionPane.showMessageDialog(this, "Could not import the clipboard: " + e.getMessage(),
@@ -581,175 +575,5 @@ public class RsPaintPanel extends PluginPanel
 	{
 		BufferedImage brush = ImageUtil.loadImageResource(RsPaintPanel.class, "paintbrush.png");
 		return ImageUtil.resizeCanvas(ImageUtil.resizeImage(brush, 16, 16, true), 16, 16);
-	}
-
-	/**
-	 * Turns strokes into JSON text and back, for export and import through the clipboard.
-	 * The JSON holds a format version and a list of strokes. The list is in draw order: the first stroke draws first,
-	 * at the bottom, and the last stroke draws on top.
-	 */
-	@Singleton
-	static class DrawingJson
-	{
-		/**
-		 * The format of the strokes in an export. When the format changes, raise this number and add a step to migrate().
-		 * Version 1: strokes without a plane. Version 2: each stroke has its plane ("z").
-		 */
-		private static final int FORMAT_VERSION = 2;
-		// The longest text that import reads. Real exports are much shorter.
-		private static final int MAX_TEXT_LENGTH = 32 * 1024 * 1024;
-		private static final String NOT_AN_EXPORT = "The text is not a drawing export.";
-
-		@Inject private Gson gson;
-
-		/** The text is not a drawing export. The message is for the player. */
-		static class InvalidDrawingException extends Exception
-		{
-			InvalidDrawingException(String message)
-			{
-				super(message);
-			}
-
-			InvalidDrawingException(String message, Throwable cause)
-			{
-				super(message, cause);
-			}
-		}
-
-		@Value
-		private static class Export
-		{
-			int version;
-			List<SyncedStroke> strokes;
-		}
-
-		/** Returns the strokes as JSON, sorted in draw order. */
-		String write(List<SyncedStroke> strokes)
-		{
-			List<SyncedStroke> sorted = new ArrayList<>(strokes);
-			sorted.sort(SyncedStroke.DRAW_ORDER);
-			return gson.toJson(new Export(FORMAT_VERSION, sorted));
-		}
-
-		/** Returns the valid strokes in the text, in the order of the text. Strokes without points are skipped. */
-		List<SyncedStroke> read(String text) throws InvalidDrawingException
-		{
-			if (text.length() > MAX_TEXT_LENGTH)
-			{
-				throw new InvalidDrawingException("The text is too long.");
-			}
-
-			Export export;
-			try
-			{
-				// Read the JSON as a tree first, so that migrate() can change an old format before Gson reads it into classes.
-				JsonElement root = gson.fromJson(text, JsonElement.class);
-				if (root == null || !root.isJsonObject())
-				{
-					throw new InvalidDrawingException(NOT_AN_EXPORT);
-				}
-				int version = formatVersion(root.getAsJsonObject());
-				if (version > FORMAT_VERSION)
-				{
-					throw new InvalidDrawingException("A newer version of the plugin made this export. Update the plugin.");
-				}
-				migrate(root.getAsJsonObject(), version);
-				export = gson.fromJson(root, Export.class);
-			}
-			catch (JsonParseException e)
-			{
-				throw new InvalidDrawingException(NOT_AN_EXPORT, e);
-			}
-
-			if (export == null || export.getStrokes() == null)
-			{
-				throw new InvalidDrawingException(NOT_AN_EXPORT);
-			}
-
-			List<SyncedStroke> strokes = new ArrayList<>();
-			for (SyncedStroke stroke : export.getStrokes())
-			{
-				SyncedStroke clean = clean(stroke);
-				if (clean != null)
-				{
-					strokes.add(clean);
-				}
-			}
-			return strokes;
-		}
-
-		/** Returns the format version of the export. */
-		private static int formatVersion(JsonObject root) throws InvalidDrawingException
-		{
-			JsonElement version = root.get("version");
-			if (version == null || !version.isJsonPrimitive() || !version.getAsJsonPrimitive().isNumber() || version.getAsInt() < 1)
-			{
-				throw new InvalidDrawingException(NOT_AN_EXPORT);
-			}
-			return version.getAsInt();
-		}
-
-		/**
-		 * Changes the JSON of an older format version into the current format. Each step changes one version into the next,
-		 * so an export of any older version goes through all of the later steps. The steps change the JSON tree,
-		 * because the JSON of an old format can fail to read into the current classes.
-		 */
-		private static void migrate(JsonObject root, int version)
-		{
-			if (version < 2)
-			{
-				// Version 1 strokes have no plane, and they showed on all floors. Put them on the ground floor.
-				for (JsonObject stroke : strokeObjects(root))
-				{
-					stroke.addProperty("z", 0);
-				}
-			}
-		}
-
-		private static List<JsonObject> strokeObjects(JsonObject root)
-		{
-			List<JsonObject> result = new ArrayList<>();
-			JsonElement strokes = root.get("strokes");
-			if (strokes != null && strokes.isJsonArray())
-			{
-				for (JsonElement stroke : strokes.getAsJsonArray())
-				{
-					if (stroke.isJsonObject())
-					{
-						result.add(stroke.getAsJsonObject());
-					}
-				}
-			}
-			return result;
-		}
-
-		private static SyncedStroke clean(SyncedStroke stroke)
-		{
-			if (stroke == null || stroke.getPoints() == null || !Stroke.isValidPlane(stroke.getPlane()))
-			{
-				return null;
-			}
-
-			List<StrokePoint> points = new ArrayList<>();
-			for (StrokePoint point : stroke.getPoints())
-			{
-				if (point != null && Float.isFinite(point.getSubx()) && Float.isFinite(point.getSuby()))
-				{
-					points.add(new StrokePoint(point.getX(), point.getY(), clamp01(point.getSubx()), clamp01(point.getSuby())));
-				}
-			}
-			if (points.isEmpty())
-			{
-				return null;
-			}
-
-			double width = Stroke.validWidth(stroke.getStrokeWidth());
-			return new SyncedStroke(stroke.getId(), stroke.getColor(), width, stroke.getOrder(), stroke.getPlane(), points);
-		}
-
-		private static float clamp01(float value)
-		{
-			return Math.max(0f, Math.min(1f, value));
-		}
 	}
 }

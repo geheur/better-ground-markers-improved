@@ -15,7 +15,7 @@ import java.util.Deque;
 import java.util.List;
 
 /**
- * Writes the points of a stroke as one short string, for party messages and exports.
+ * Writes the points of a stroke as one short string, for party messages, exports and saved strokes.
  * Also removes the points of a complete stroke that do not change its shape.
  *
  * <p>Each position is rounded to 1/128 of a tile, which is one local unit. The first point is stored as its full

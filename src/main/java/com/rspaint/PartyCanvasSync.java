@@ -364,6 +364,22 @@ public class PartyCanvasSync
 		return new SyncedStroke(stroke.id, stroke.color.getRGB(), stroke.strokeWidth, stroke.order, stroke.plane, new ArrayList<>(points));
 	}
 
+	/** Returns a local stroke with the id, draw order and points of the synced stroke. A stroke without an id gets a new id. */
+	static Stroke fromSynced(SyncedStroke synced)
+	{
+		Stroke stroke = new Stroke();
+		if (synced.getId() != null)
+		{
+			stroke.id = synced.getId();
+		}
+		stroke.color = new Color(synced.getColor(), true);
+		stroke.strokeWidth = synced.getStrokeWidth();
+		stroke.order = synced.getOrder();
+		stroke.plane = synced.getPlane();
+		stroke.pts.addAll(synced.getPoints());
+		return stroke;
+	}
+
 	private boolean canSend()
 	{
 		return partyService.isInParty() && partyService.getLocalMember() != null;
@@ -610,7 +626,7 @@ public class PartyCanvasSync
 	}
 
 	/**
-	 * A stroke, or a part of a stroke, that is sent to party members or exported as JSON.
+	 * A stroke, or a part of a stroke, that is sent to party members, exported, or saved as JSON (StrokeStorage version 2).
 	 * The JSON names are one letter, and the points are one encoded string, because a full sync can have 1000 strokes.
 	 */
 	@Value
