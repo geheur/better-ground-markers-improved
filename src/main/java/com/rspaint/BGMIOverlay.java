@@ -864,8 +864,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 		if (!strokes.isEmpty())
 		{
-			// Party members get the strokes of the area that the player is in.
-			partySync.requestFullSync();
+			// Party members get the strokes of the area that the player is in. They already have the other strokes,
+			// so only the strokes of this region go out.
+			partySync.onStrokesRestored(strokes);
 		}
 		return strokes;
 	}
@@ -931,6 +932,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	void importStrokes(List<PartyCanvasSync.SyncedStroke> strokes)
 	{
 		Set<Integer> changedRegions = new LinkedHashSet<>();
+		List<Stroke> imported = new ArrayList<>();
 		for (PartyCanvasSync.SyncedStroke synced : strokes)
 		{
 			if (synced.getPoints() == null || synced.getPoints().isEmpty())
@@ -945,9 +947,10 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			stroke.pts.addAll(StrokeCodec.simplify(synced.getPoints()));
 			regionStrokes(stroke.primaryRegion()).add(stroke);
 			changedRegions.add(stroke.primaryRegion());
+			imported.add(stroke);
 		}
 		changedRegions.forEach(this::saveStrokes);
-		partySync.requestFullSync();
+		partySync.onStrokesRestored(imported);
 	}
 
 	private void drawStrokes(Graphics2D graphics, int mx, int my)

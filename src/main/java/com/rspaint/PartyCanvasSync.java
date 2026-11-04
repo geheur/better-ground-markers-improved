@@ -75,7 +75,7 @@ public class PartyCanvasSync
 	// Outgoing changes waiting for the next flush. Client thread only.
 	private final Map<Stroke, List<StrokePoint>> pendingPoints = new LinkedHashMap<>();
 	private final List<String> pendingErases = new ArrayList<>();
-	// Strokes that undo or redo put back. They go out complete and replace the receiver's copy.
+	// Strokes that undo, redo, a region load or an import put back. They go out complete and replace the receiver's copy.
 	private final Set<Stroke> pendingRestores = new LinkedHashSet<>();
 	private boolean fullSyncPending = false;
 	private boolean canvasRequestPending = false;
@@ -194,12 +194,6 @@ public class PartyCanvasSync
 		return result;
 	}
 
-	/** Sends the complete local canvas on the next flush. Client thread only. */
-	void requestFullSync()
-	{
-		fullSyncPending = true;
-	}
-
 	void onPointAdded(Stroke stroke, StrokePoint point)
 	{
 		if (partyService.isInParty())
@@ -223,6 +217,10 @@ public class PartyCanvasSync
 		}
 	}
 
+	/**
+	 * Sends the complete strokes on the next flush, without a reset. Each stroke replaces the receiver's copy.
+	 * Undo, redo, region loads and imports use this. Client thread only.
+	 */
 	void onStrokesRestored(Collection<Stroke> strokes)
 	{
 		if (!partyService.isInParty())
@@ -304,7 +302,11 @@ public class PartyCanvasSync
 		// After the full sync, so that its reset does not remove these strokes again.
 		if (!pendingRestores.isEmpty())
 		{
-			sendCompleteStrokes(new ArrayList<>(pendingRestores), false);
+			// A big import can restore many strokes. Receivers keep only the newest MAX_SYNCED_STROKES, so send only those.
+			List<Stroke> strokes = new ArrayList<>(pendingRestores);
+			strokes.sort(Stroke.DRAW_ORDER);
+			int skipped = Math.max(0, strokes.size() - MAX_SYNCED_STROKES);
+			sendCompleteStrokes(strokes.subList(skipped, strokes.size()), false);
 		}
 
 		if (!pendingPoints.isEmpty())
