@@ -8,7 +8,6 @@ import com.rspaint.RsPaintPlugin.StrokePoint;
 import java.awt.Color;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -16,6 +15,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import javax.inject.Inject;
@@ -63,6 +63,10 @@ public class PartyCanvasSync
 	// and only after the mouse moves 3 screen pixels. So 5000 points are a line of at least 15000 pixels, about 8 times
 	// across a 1920-pixel screen, and more than 1.5 minutes of drawing without a stop at 50 FPS. Real strokes are much shorter.
 	private static final int MAX_STROKE_POINTS = 5000;
+	// A member canvas keeps at most this many points in all its strokes. If a member sends more, the oldest strokes go.
+	// Without this limit, one member could send 1000 strokes of 5000 points, and drawing them would freeze the client.
+	// A full sync of 1000 strokes that simplify keeps at 100 points each fits.
+	private static final int MAX_MEMBER_POINTS = 100_000;
 
 	@Inject private ClientThread clientThread;
 	@Inject private PartyService partyService;
@@ -551,6 +555,10 @@ public class PartyCanvasSync
 	{
 		final Map<Integer, List<Stroke>> strokesByRegion = new HashMap<>();
 		final Map<String, Stroke> strokesById = new HashMap<>();
+		// The same strokes in draw order, so the oldest stroke is first.
+		final TreeSet<Stroke> strokesByOrder = new TreeSet<>(Stroke.DRAW_ORDER);
+		// The number of points in all strokes of the canvas.
+		int totalPoints = 0;
 
 		void append(SyncedStroke synced)
 		{
@@ -561,7 +569,8 @@ public class PartyCanvasSync
 			}
 			else if (synced.getPoints() != null)
 			{
-				addPoints(stroke, synced.getPoints());
+				totalPoints += addPoints(stroke, synced.getPoints());
+				removeOldestOverBudget();
 			}
 		}
 
@@ -576,6 +585,8 @@ public class PartyCanvasSync
 			Stroke stroke = strokesById.remove(id);
 			if (stroke != null)
 			{
+				strokesByOrder.remove(stroke);
+				totalPoints -= stroke.pts.size();
 				List<Stroke> strokes = strokesByRegion.get(stroke.primaryRegion());
 				if (strokes != null)
 				{
@@ -588,6 +599,8 @@ public class PartyCanvasSync
 		{
 			strokesByRegion.clear();
 			strokesById.clear();
+			strokesByOrder.clear();
+			totalPoints = 0;
 		}
 
 		private void add(SyncedStroke synced)
@@ -612,7 +625,7 @@ public class PartyCanvasSync
 			// than all kept strokes, for example an old stroke that undo puts back, is dropped. A full sync would drop it too.
 			if (strokesById.size() >= MAX_SYNCED_STROKES)
 			{
-				Stroke oldest = Collections.min(strokesById.values(), Stroke.DRAW_ORDER);
+				Stroke oldest = strokesByOrder.first();
 				if (Stroke.DRAW_ORDER.compare(stroke, oldest) < 0)
 				{
 					return;
@@ -621,16 +634,34 @@ public class PartyCanvasSync
 			}
 
 			strokesById.put(stroke.id, stroke);
+			strokesByOrder.add(stroke);
 			strokesByRegion.computeIfAbsent(stroke.primaryRegion(), k -> new ArrayList<>()).add(stroke);
+			totalPoints += stroke.pts.size();
+			removeOldestOverBudget();
 		}
 
-		/** Adds the points to the stroke, but not past MAX_STROKE_POINTS. */
-		private void addPoints(Stroke stroke, List<StrokePoint> points)
+		/** Adds the points to the stroke, but not past MAX_STROKE_POINTS. Returns the number of points added. */
+		private int addPoints(Stroke stroke, List<StrokePoint> points)
 		{
 			int room = MAX_STROKE_POINTS - stroke.pts.size();
-			if (room > 0)
+			if (room <= 0)
 			{
-				stroke.pts.addAll(points.size() <= room ? points : points.subList(0, room));
+				return 0;
+			}
+			int added = Math.min(room, points.size());
+			stroke.pts.addAll(points.subList(0, added));
+			return added;
+		}
+
+		/**
+		 * Removes the oldest strokes until the canvas has at most MAX_MEMBER_POINTS points.
+		 * A stroke has at most MAX_STROKE_POINTS points, so the newest stroke always stays.
+		 */
+		private void removeOldestOverBudget()
+		{
+			while (totalPoints > MAX_MEMBER_POINTS && !strokesByOrder.isEmpty())
+			{
+				remove(strokesByOrder.first().id);
 			}
 		}
 	}
