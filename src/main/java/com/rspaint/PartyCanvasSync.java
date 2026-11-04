@@ -41,6 +41,8 @@ import net.runelite.client.party.messages.UserSync;
 public class PartyCanvasSync
 {
 	private static final long FLUSH_INTERVAL_MS = 200;
+	// A full sync goes out at most once in this time. If members join or ask during the wait, one full sync answers all of them.
+	private static final long FULL_SYNC_INTERVAL_MS = 10_000;
 
 	// Payload of one stroke in a message, measured with Gson: about 76 bytes for the stroke and 2.7 bytes for each point.
 	// The plane adds 6 bytes ("z":0,) to the stroke. StrokeCodec encodes the points. As plain JSON objects, each point was about 55 bytes.
@@ -80,6 +82,7 @@ public class PartyCanvasSync
 	private boolean fullSyncPending = false;
 	private boolean canvasRequestPending = false;
 	private long lastFlush = 0;
+	private long lastFullSync = 0;
 
 	void startUp()
 	{
@@ -265,7 +268,7 @@ public class PartyCanvasSync
 		// Drop the pending changes even if a send fails, so the error does not repeat on every tick.
 		try
 		{
-			sendPending(localStrokesByRegion);
+			sendPending(localStrokesByRegion, now);
 		}
 		catch (RuntimeException e)
 		{
@@ -279,7 +282,7 @@ public class PartyCanvasSync
 		}
 	}
 
-	private void sendPending(Map<Integer, List<Stroke>> localStrokesByRegion)
+	private void sendPending(Map<Integer, List<Stroke>> localStrokesByRegion, long now)
 	{
 		if (canvasRequestPending)
 		{
@@ -287,9 +290,12 @@ public class PartyCanvasSync
 			send(new RsPaintCanvasRequest());
 		}
 
-		if (fullSyncPending)
+		// If the last full sync is too recent, the full sync stays pending and goes out on a later flush.
+		// It reads the canvas when it goes out, so it has all changes from the wait.
+		if (fullSyncPending && now - lastFullSync >= FULL_SYNC_INTERVAL_MS)
 		{
 			fullSyncPending = false;
+			lastFullSync = now;
 			List<Stroke> strokes = new ArrayList<>();
 			localStrokesByRegion.values().forEach(strokes::addAll);
 			// Receivers sort by the order in each stroke. Old versions of the plugin use the message order.
@@ -535,6 +541,8 @@ public class PartyCanvasSync
 		clientThread.invokeLater(() -> {
 			canvases.clear();
 			clearPending();
+			// The members of the new party do not have the canvas yet, so the wait does not apply to them.
+			lastFullSync = 0;
 		});
 		hiddenMembers.clear();
 	}
