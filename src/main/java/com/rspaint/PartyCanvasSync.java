@@ -6,10 +6,14 @@ import com.rspaint.RsPaintPlugin.Stroke;
 import com.rspaint.RsPaintPlugin.StrokeClock;
 import com.rspaint.RsPaintPlugin.StrokePoint;
 import java.awt.Color;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -54,8 +58,9 @@ public class PartyCanvasSync
 	// A full sync sends only the newest strokes, so that a big canvas does not flood the party.
 	// Older strokes stay on your screen, but party members lose them on the next full sync.
 	// A stroke gets at most one point each frame, so a line drawn in 1 second at 50 FPS has about 50 points.
-	// StrokeCodec.simplify keeps about 25 of them. Then 1000 strokes are about 150 KB in about 5 messages, all sent in one flush.
+	// StrokeCodec.simplify keeps about 25 of them. Then 1000 strokes are about 150 KB in about 5 messages.
 	// A line of 200 points keeps about 100, and 1000 of those are about 390 KB in about 12 messages.
+	// A full sync also sends at most MAX_MEMBER_POINTS points, and MAX_FLUSH_BYTES spreads its messages over several flushes.
 	// A member canvas also keeps only this many strokes, the newest ones, so a member cannot fill your memory.
 	private static final int MAX_SYNCED_STROKES = 1000;
 	// A member canvas keeps at most this many points in each stroke, and drops the points after them.
@@ -67,6 +72,14 @@ public class PartyCanvasSync
 	// Without this limit, one member could send 1000 strokes of 5000 points, and drawing them would freeze the client.
 	// A full sync of 1000 strokes that simplify keeps at 100 points each fits.
 	private static final int MAX_MEMBER_POINTS = 100_000;
+	// One flush sends messages of at most about this many bytes in all. The other messages wait for the next flushes,
+	// so a full sync of about 390 KB goes out in about 2.5 seconds, not in one burst. A message that is larger goes out alone.
+	private static final int MAX_FLUSH_BYTES = 32 * 1024;
+	// Payload of one id in an erase message: about 13 characters, the quotes and a comma.
+	private static final int ID_BYTES = 16;
+	// The party has the strokes with these ids, so a region load does not send them again.
+	// At most this many ids are kept. A stroke whose id is forgotten goes out again on the next load of its region.
+	private static final int MAX_SENT_IDS = 10 * MAX_SYNCED_STROKES;
 
 	@Inject private ClientThread clientThread;
 	@Inject private PartyService partyService;
@@ -83,6 +96,11 @@ public class PartyCanvasSync
 	private final List<String> pendingErases = new ArrayList<>();
 	// Strokes that undo, redo, a region load or an import put back. They go out complete and replace the receiver's copy.
 	private final Set<Stroke> pendingRestores = new LinkedHashSet<>();
+	// Messages that wait to go out, in the order they must arrive. Each flush sends at most MAX_FLUSH_BYTES of them.
+	// Client thread only.
+	private final Deque<Outgoing> outbox = new ArrayDeque<>();
+	// Ids of the local strokes that the party has since the last full sync, the oldest first. Client thread only.
+	private final Set<String> sentIds = new LinkedHashSet<>();
 	private boolean fullSyncPending = false;
 	private boolean canvasRequestPending = false;
 	// Times from monotonicMillis, or NEVER. The wall clock is not used, because it can go back.
@@ -205,7 +223,8 @@ public class PartyCanvasSync
 
 	void onPointAdded(Stroke stroke, StrokePoint point)
 	{
-		if (partyService.isInParty())
+		// Receivers keep at most MAX_STROKE_POINTS points of a stroke, so the points after them do not go out.
+		if (partyService.isInParty() && stroke.pts.size() <= MAX_STROKE_POINTS)
 		{
 			pendingPoints.computeIfAbsent(stroke, k -> new ArrayList<>()).add(point);
 		}
@@ -223,12 +242,14 @@ public class PartyCanvasSync
 			pendingPoints.remove(stroke);
 			pendingRestores.remove(stroke);
 			pendingErases.add(stroke.id);
+			sentIds.remove(stroke.id);
 		}
 	}
 
 	/**
 	 * Sends the complete strokes on the next flush, without a reset. Each stroke replaces the receiver's copy.
-	 * Undo, redo, region loads and imports use this. Client thread only.
+	 * Undo, redo, region loads and imports use this. A stroke that the party has already does not go out again,
+	 * for example a stroke of a region that loads again after a teleport. Client thread only.
 	 */
 	void onStrokesRestored(Collection<Stroke> strokes)
 	{
@@ -239,6 +260,11 @@ public class PartyCanvasSync
 
 		for (Stroke stroke : strokes)
 		{
+			// An erase removes the id from sentIds, so undo of an erase and redo of a draw always send the stroke.
+			if (sentIds.contains(stroke.id))
+			{
+				continue;
+			}
 			// If the erase is not sent yet, receivers still have the stroke. A replace is correct in both cases.
 			pendingErases.remove(stroke.id);
 			pendingPoints.remove(stroke);
@@ -274,11 +300,13 @@ public class PartyCanvasSync
 		// Drop the pending changes even if a send fails, so the error does not repeat on every tick.
 		try
 		{
-			sendPending(localStrokesByRegion, now);
+			queuePending(localStrokesByRegion, now);
+			sendFromOutbox();
 		}
 		catch (RuntimeException e)
 		{
 			log.warn("Could not send canvas changes to the party", e);
+			outbox.clear();
 		}
 		finally
 		{
@@ -286,6 +314,69 @@ public class PartyCanvasSync
 			pendingErases.clear();
 			pendingRestores.clear();
 		}
+	}
+
+	/** Sends the oldest messages of the outbox, at most about MAX_FLUSH_BYTES in all, but always at least one message. */
+	private void sendFromOutbox()
+	{
+		int bytes = 0;
+		while (!outbox.isEmpty())
+		{
+			Outgoing next = outbox.peekFirst();
+			if (bytes > 0 && bytes + next.bytes > MAX_FLUSH_BYTES)
+			{
+				return;
+			}
+			outbox.removeFirst();
+			bytes += next.bytes;
+			send(next.message);
+		}
+	}
+
+	private void markSent(String id)
+	{
+		// Move the id to the end, so the oldest ids are forgotten first.
+		sentIds.remove(id);
+		sentIds.add(id);
+		if (sentIds.size() > MAX_SENT_IDS)
+		{
+			Iterator<String> oldest = sentIds.iterator();
+			oldest.next();
+			oldest.remove();
+		}
+	}
+
+	/** Returns at most the first MAX_STROKE_POINTS points, because receivers drop the points after them. */
+	private static List<StrokePoint> sentPoints(Stroke stroke)
+	{
+		return stroke.pts.size() > MAX_STROKE_POINTS ? stroke.pts.subList(0, MAX_STROKE_POINTS) : stroke.pts;
+	}
+
+	/**
+	 * Returns the newest strokes of the list that a receiver keeps: at most MAX_SYNCED_STROKES strokes and
+	 * MAX_MEMBER_POINTS sent points. The list must be in draw order. Strokes without points are skipped.
+	 */
+	private static List<Stroke> newestKept(List<Stroke> strokes)
+	{
+		List<Stroke> kept = new ArrayList<>();
+		int points = 0;
+		for (int i = strokes.size() - 1; i >= 0 && kept.size() < MAX_SYNCED_STROKES; i--)
+		{
+			Stroke stroke = strokes.get(i);
+			int size = sentPoints(stroke).size();
+			if (size == 0)
+			{
+				continue;
+			}
+			if (points + size > MAX_MEMBER_POINTS)
+			{
+				break;
+			}
+			points += size;
+			kept.add(stroke);
+		}
+		Collections.reverse(kept);
+		return kept;
 	}
 
 	/** Returns milliseconds from System.nanoTime. Only the difference of two values has a meaning. */
@@ -299,89 +390,108 @@ public class PartyCanvasSync
 		return since == NEVER || now - since >= intervalMs;
 	}
 
-	private void sendPending(Map<Integer, List<Stroke>> localStrokesByRegion, long now)
+	/**
+	 * Puts the pending changes into the outbox as messages. The outbox keeps their order, so a receiver gets each change
+	 * after the changes before it, also when the messages go out over several flushes.
+	 */
+	private void queuePending(Map<Integer, List<Stroke>> localStrokesByRegion, long now)
 	{
 		if (canvasRequestPending)
 		{
 			canvasRequestPending = false;
+			// The answers do not depend on the order of the other messages, so the request does not wait in the outbox.
 			send(new RsPaintCanvasRequest());
 		}
 
 		// If the last full sync is too recent, the full sync stays pending and goes out on a later flush.
-		// It reads the canvas when it goes out, so it has all changes from the wait.
+		// It reads the canvas when it is queued, so it has all changes from the wait.
 		if (fullSyncPending && hasElapsed(lastFullSync, now, FULL_SYNC_INTERVAL_MS))
 		{
 			fullSyncPending = false;
 			lastFullSync = now;
+			// The reset removes all earlier strokes on the receivers, so the messages before it are not needed.
+			outbox.clear();
+			sentIds.clear();
 			List<Stroke> strokes = new ArrayList<>();
 			localStrokesByRegion.values().forEach(strokes::addAll);
 			// Receivers sort by the order in each stroke. Old versions of the plugin use the message order.
 			strokes.sort(Stroke.DRAW_ORDER);
-			// The newest strokes are at the end of the list.
-			int skipped = Math.max(0, strokes.size() - MAX_SYNCED_STROKES);
-			sendCompleteStrokes(strokes.subList(skipped, strokes.size()), true);
+			queueCompleteStrokes(newestKept(strokes), true);
 		}
 
 		// After the full sync, so that its reset does not remove these strokes again.
 		if (!pendingRestores.isEmpty())
 		{
-			// A big import can restore many strokes. Receivers keep only the newest MAX_SYNCED_STROKES, so send only those.
+			// A big import can restore many strokes. Receivers keep only the newest strokes, so send only those.
 			List<Stroke> strokes = new ArrayList<>(pendingRestores);
 			strokes.sort(Stroke.DRAW_ORDER);
-			int skipped = Math.max(0, strokes.size() - MAX_SYNCED_STROKES);
-			sendCompleteStrokes(strokes.subList(skipped, strokes.size()), false);
+			queueCompleteStrokes(newestKept(strokes), false);
 		}
 
 		if (!pendingPoints.isEmpty())
 		{
 			List<SyncedStroke> strokes = new ArrayList<>();
+			int bytes = 0;
 			for (Map.Entry<Stroke, List<StrokePoint>> entry : pendingPoints.entrySet())
 			{
 				strokes.add(toSynced(entry.getKey(), entry.getValue()));
+				bytes += STROKE_BYTES + POINT_BYTES * entry.getValue().size();
+				markSent(entry.getKey().id);
 			}
-			send(new RsPaintStrokeAppend(strokes));
+			outbox.addLast(new Outgoing(new RsPaintStrokeAppend(strokes), bytes));
 		}
 
 		if (!pendingErases.isEmpty())
 		{
-			send(new RsPaintStrokeErase(new ArrayList<>(pendingErases)));
+			outbox.addLast(new Outgoing(new RsPaintStrokeErase(new ArrayList<>(pendingErases)), ID_BYTES * pendingErases.size()));
 		}
 	}
 
 	/**
-	 * Sends the complete strokes in chunks of about MAX_MESSAGE_BYTES at most. A stroke larger than that goes in a chunk alone.
-	 * If reset is true, the first chunk resets the receiver's canvas. Without a reset, each stroke replaces the receiver's copy.
+	 * Queues the complete strokes in chunks of about MAX_MESSAGE_BYTES at most. A stroke larger than that goes in a chunk
+	 * alone. Each stroke goes out with at most MAX_STROKE_POINTS points. If reset is true, the first chunk resets the
+	 * receiver's canvas. Without a reset, each stroke replaces the receiver's copy.
 	 */
-	private void sendCompleteStrokes(List<Stroke> strokes, boolean reset)
+	private void queueCompleteStrokes(List<Stroke> strokes, boolean reset)
 	{
 		List<SyncedStroke> chunk = new ArrayList<>();
 		int chunkBytes = 0;
 		for (Stroke stroke : strokes)
 		{
-			if (stroke.pts.isEmpty())
+			List<StrokePoint> points = sentPoints(stroke);
+			if (points.isEmpty())
 			{
 				continue;
 			}
 
 			pendingPoints.remove(stroke);
 
-			int strokeBytes = STROKE_BYTES + POINT_BYTES * stroke.pts.size();
+			int strokeBytes = STROKE_BYTES + POINT_BYTES * points.size();
 			if (!chunk.isEmpty() && chunkBytes + strokeBytes > MAX_MESSAGE_BYTES)
 			{
-				send(new RsPaintCanvasSync(reset, chunk));
+				outbox.addLast(new Outgoing(new RsPaintCanvasSync(reset, chunk), chunkBytes));
 				reset = false;
 				chunk = new ArrayList<>();
 				chunkBytes = 0;
 			}
-			chunk.add(toSynced(stroke, stroke.pts));
+			chunk.add(toSynced(stroke, points));
 			chunkBytes += strokeBytes;
+			markSent(stroke.id);
 		}
 
 		// A reset goes out even when empty, so receivers drop old strokes.
 		if (!chunk.isEmpty() || reset)
 		{
-			send(new RsPaintCanvasSync(reset, chunk));
+			outbox.addLast(new Outgoing(new RsPaintCanvasSync(reset, chunk), chunkBytes));
 		}
+	}
+
+	/** A message in the outbox, with its estimated payload in bytes. */
+	@Value
+	private static class Outgoing
+	{
+		PartyMessage message;
+		int bytes;
 	}
 
 	static SyncedStroke toSynced(Stroke stroke, List<StrokePoint> points)
@@ -427,6 +537,9 @@ public class PartyCanvasSync
 		pendingPoints.clear();
 		pendingErases.clear();
 		pendingRestores.clear();
+		outbox.clear();
+		// Callers clear the receivers' copy of the canvas, or the party is gone.
+		sentIds.clear();
 		fullSyncPending = false;
 		canvasRequestPending = false;
 	}
