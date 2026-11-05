@@ -1547,6 +1547,11 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		colors = saved;
 	}
 
+	/** Frees the loaded strokes and the history while the plugin is off. */
+	public void shutDown() {
+		clientThread.invokeLater(this::resetCanvas);
+	}
+
 	/**
 	 * Forgets the loaded strokes and the history. The overlay is a singleton, so without this the strokes of the old
 	 * profile or the last session stay loaded, and the next save writes them over the saved strokes.

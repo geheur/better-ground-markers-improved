@@ -70,6 +70,7 @@ public class RsPaintPlugin extends Plugin
 		mouseManager.unregisterMouseListener(bgmiOverlay);
 		keyManager.unregisterKeyListener(bgmiOverlay);
 		eventBus.unregister(bgmiOverlay);
+		bgmiOverlay.shutDown();
 
 		eventBus.unregister(partySync);
 		partySync.shutDown();
