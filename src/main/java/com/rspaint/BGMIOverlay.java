@@ -38,6 +38,7 @@ import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.Constants;
 import net.runelite.api.GameState;
@@ -55,6 +56,7 @@ import net.runelite.api.events.GameStateChanged;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.input.KeyListener;
 import net.runelite.client.input.MouseListener;
 import net.runelite.client.ui.components.colorpicker.ColorPickerManager;
@@ -134,6 +136,39 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		skippedPoint = null;
 	}
 
+	/** Starts a new stroke at the point. Does nothing if the region of the point cannot be saved. */
+	private void startStroke(StrokePoint point, int plane)
+	{
+		int region = new WorldPoint(point.getX(), point.getY(), 0).getRegionID();
+		List<Stroke> strokes = regionStrokes(region);
+		if (unreadableRegions.contains(region))
+		{
+			// The saved strokes of this region stay as they are, so a new stroke here would be lost on the next load.
+			warnUnreadableRegion(region);
+			return;
+		}
+		currentStroke = new Stroke();
+		currentStroke.color = selectedColor();
+		currentStroke.strokeWidth = strokeSize;
+		currentStroke.order = clock.next();
+		currentStroke.plane = plane;
+		strokes.add(currentStroke);
+		addToHistory(new CanvasChange(true, List.of(currentStroke)));
+		addPoint(point);
+	}
+
+	// Regions that the player was told about, so the message shows once per region and not on each frame.
+	private final Set<Integer> warnedRegions = new HashSet<>();
+
+	private void warnUnreadableRegion(int region)
+	{
+		if (warnedRegions.add(region))
+		{
+			client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
+				"RsPaint cannot read the saved strokes of this area, so you cannot draw here. A newer version of the plugin can have saved them.", null);
+		}
+	}
+
 	private boolean isFarFromLastPoint(pf ground)
 	{
 		List<StrokePoint> pts = currentStroke.pts;
@@ -161,10 +196,21 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		{
 			// The stroke is complete. Fewer points make saves, full syncs, exports and drawing faster.
 			int oldRegion = currentStroke.primaryRegion();
-			currentStroke.pts = StrokeCodec.simplify(currentStroke.pts);
+			List<StrokePoint> rawPts = currentStroke.pts;
+			currentStroke.pts = StrokeCodec.simplify(rawPts);
 			// Simplify rounds the points, so the first point can move onto a tile in the next region.
 			// Strokes are saved and found by their primary region, so the stroke must be in the list of that region.
 			int newRegion = currentStroke.primaryRegion();
+			if (newRegion != oldRegion)
+			{
+				regionStrokes(newRegion);
+				if (unreadableRegions.contains(newRegion))
+				{
+					// The next region cannot be saved. Keep the points as drawn, so the stroke stays in its region.
+					currentStroke.pts = rawPts;
+					newRegion = oldRegion;
+				}
+			}
 			if (newRegion != oldRegion)
 			{
 				List<Stroke> oldStrokes = strokesByRegion.get(oldRegion);
@@ -521,14 +567,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 					}
 					StrokePoint point = new StrokePoint(tilex, tiley, sub.x, sub.y);
 					if (currentStroke == null) {
-						currentStroke = new Stroke();
-						currentStroke.color = selectedColor();
-						currentStroke.strokeWidth = strokeSize;
-						currentStroke.order = clock.next();
-						currentStroke.plane = plane;
-						regionStrokes(new WorldPoint(tilex, tiley, 0).getRegionID()).add(currentStroke);
-						addToHistory(new CanvasChange(true, List.of(currentStroke)));
-						addPoint(point);
+						startStroke(point, plane);
 					} else if (isFarFromLastPoint(ground)) {
 						addPoint(point);
 					} else {
@@ -1488,6 +1527,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	public void startUp() {
 		showOwnStrokes = true;
+		resetCanvas();
 
 		Integer savedSize = configManager.getConfiguration(RsPaintConfig.GROUP, "strokeSize", Integer.class);
 		strokeSize = savedSize != null ? Math.max(Stroke.MIN_WIDTH, Math.min(Stroke.MAX_WIDTH, savedSize)) : Stroke.MIN_WIDTH;
@@ -1503,6 +1543,34 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			saved.add(null);
 		}
 		colors = saved;
+	}
+
+	/**
+	 * Forgets the loaded strokes and the history. The overlay is a singleton, so without this the strokes of the old
+	 * profile or the last session stay loaded, and the next save writes them over the saved strokes.
+	 */
+	private void resetCanvas() {
+		strokesByRegion.clear();
+		unreadableRegions.clear();
+		warnedRegions.clear();
+		undoStack.clear();
+		redoStack.clear();
+		currentStroke = null;
+		skippedPoint = null;
+		currentErase = null;
+	}
+
+	@Subscribe public void onProfileChanged(ProfileChanged e) {
+		clientThread.invoke(() -> {
+			// The new profile has its own strokes, colors and stroke size.
+			startUp();
+			// Party members still have the strokes of the old profile.
+			partySync.onCanvasCleared();
+			WorldView worldView = client.getTopLevelWorldView();
+			if (client.getGameState() == GameState.LOGGED_IN && worldView != null) {
+				loadStrokes(sceneRegions(worldView));
+			}
+		});
 	}
 
 	private void useDefaultPalette() {
