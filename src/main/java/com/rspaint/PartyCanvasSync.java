@@ -85,8 +85,10 @@ public class PartyCanvasSync
 	private final Set<Stroke> pendingRestores = new LinkedHashSet<>();
 	private boolean fullSyncPending = false;
 	private boolean canvasRequestPending = false;
-	private long lastFlush = 0;
-	private long lastFullSync = 0;
+	// Times from monotonicMillis, or NEVER. The wall clock is not used, because it can go back.
+	private static final long NEVER = Long.MIN_VALUE;
+	private long lastFlush = NEVER;
+	private long lastFullSync = NEVER;
 
 	void startUp()
 	{
@@ -256,8 +258,8 @@ public class PartyCanvasSync
 	/** Called on each client tick. Sends at most once per FLUSH_INTERVAL_MS. */
 	void flush(Map<Integer, List<Stroke>> localStrokesByRegion)
 	{
-		long now = System.currentTimeMillis();
-		if (now - lastFlush < FLUSH_INTERVAL_MS)
+		long now = monotonicMillis();
+		if (!hasElapsed(lastFlush, now, FLUSH_INTERVAL_MS))
 		{
 			return;
 		}
@@ -286,6 +288,17 @@ public class PartyCanvasSync
 		}
 	}
 
+	/** Returns milliseconds from System.nanoTime. Only the difference of two values has a meaning. */
+	private static long monotonicMillis()
+	{
+		return System.nanoTime() / 1_000_000;
+	}
+
+	private static boolean hasElapsed(long since, long now, long intervalMs)
+	{
+		return since == NEVER || now - since >= intervalMs;
+	}
+
 	private void sendPending(Map<Integer, List<Stroke>> localStrokesByRegion, long now)
 	{
 		if (canvasRequestPending)
@@ -296,7 +309,7 @@ public class PartyCanvasSync
 
 		// If the last full sync is too recent, the full sync stays pending and goes out on a later flush.
 		// It reads the canvas when it goes out, so it has all changes from the wait.
-		if (fullSyncPending && now - lastFullSync >= FULL_SYNC_INTERVAL_MS)
+		if (fullSyncPending && hasElapsed(lastFullSync, now, FULL_SYNC_INTERVAL_MS))
 		{
 			fullSyncPending = false;
 			lastFullSync = now;
@@ -546,7 +559,7 @@ public class PartyCanvasSync
 			canvases.clear();
 			clearPending();
 			// The members of the new party do not have the canvas yet, so the wait does not apply to them.
-			lastFullSync = 0;
+			lastFullSync = NEVER;
 		});
 		hiddenMembers.clear();
 	}

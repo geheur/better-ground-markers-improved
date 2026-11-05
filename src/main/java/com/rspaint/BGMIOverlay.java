@@ -894,7 +894,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		List<Stroke> strokes = new ArrayList<>();
 		for (PartyCanvasSync.SyncedStroke synced : loaded.getStrokes())
 		{
-			strokes.add(PartyCanvasSync.fromSynced(synced));
+			Stroke stroke = PartyCanvasSync.fromSynced(synced);
+			clock.advancePast(stroke.order);
+			strokes.add(stroke);
 		}
 		if (loaded.getVersion() < StrokeStorage.FORMAT_VERSION)
 		{

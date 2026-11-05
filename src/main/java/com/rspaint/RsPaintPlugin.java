@@ -174,5 +174,18 @@ public class RsPaintPlugin extends Plugin
 			last = Math.max(last, order);
 			return order;
 		}
+
+		/**
+		 * Moves the clock past the order of a saved stroke, so new strokes draw over it. A saved order can be in the future,
+		 * for example because a party member with a fast clock moved the clock forward in an earlier session.
+		 * Orders that are not valid do not change the clock, and the stroke keeps its order.
+		 */
+		void advancePast(long order)
+		{
+			if (order > 0 && order < MAX_ORDER)
+			{
+				last = Math.max(last, order);
+			}
+		}
 	}
 }
