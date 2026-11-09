@@ -12,6 +12,7 @@ import javax.inject.Singleton;
 import lombok.Value;
 import net.runelite.api.Constants;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.input.KeyManager;
@@ -40,6 +41,8 @@ public class RsPaintPlugin extends Plugin
 	@Inject PartyCanvasSync partySync;
 	@Inject RsPaintPanel panel;
 	@Inject ClientToolbar clientToolbar;
+	@Inject SceneStrokes sceneStrokes;
+	@Inject ClientThread clientThread;
 
 	private NavigationButton navigationButton;
 
@@ -52,6 +55,8 @@ public class RsPaintPlugin extends Plugin
 	@Override
 	protected void startUp() throws Exception
 	{
+		sceneStrokes.startUp();
+		eventBus.register(sceneStrokes);
 		bgmiOverlay.startUp();
 		overlayManager.add(bgmiOverlay);
 		mouseManager.registerMouseListener(bgmiOverlay);
@@ -80,6 +85,11 @@ public class RsPaintPlugin extends Plugin
 		keyManager.unregisterKeyListener(bgmiOverlay);
 		eventBus.unregister(bgmiOverlay);
 		bgmiOverlay.shutDown();
+
+		// The strokes in the world are scene objects, which only the client thread can take out of the scene.
+		eventBus.unregister(sceneStrokes);
+		sceneStrokes.shutDown();
+		clientThread.invokeLater(sceneStrokes::clearAll);
 
 		eventBus.unregister(partySync);
 		partySync.shutDown();

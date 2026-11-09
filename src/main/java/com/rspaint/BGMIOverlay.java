@@ -50,6 +50,7 @@ import net.runelite.api.Tile;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.BeforeRender;
 import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.FocusChanged;
 import net.runelite.api.events.GameStateChanged;
@@ -80,6 +81,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	@Inject private StrokeClock clock;
 	@Inject private StrokeStorage storage;
 	@Inject private StrokeBackups backups;
+	@Inject private SceneStrokes sceneStrokes;
 
 	@Getter @Setter private volatile boolean showOwnStrokes = true;
 
@@ -547,6 +549,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 			if (poly != null)
 			{
+				cursorTileX = tilex;
+				cursorTileY = tiley;
 				int
 					x0 = poly.xpoints[0],
 					y0 = poly.ypoints[0],
@@ -558,6 +562,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 					y3 = poly.ypoints[3];
 
 				pf sub = getBarycentre(mx, my, x0, y0, x1, y1, x2, y2, x3, y3);
+				cursorSub = sub;
 				ground = projectToScreen(sub.x, sub.y, poly);
 
 				if (drawing) {
@@ -590,6 +595,10 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 					float size = screenWidth(strokeSize);
 					if (size <= 2) {
 						graphics.drawRect((int) ground.x - 1, (int) ground.y - 1, 2, 2);
+					} else if (sceneStrokes.isActive()) {
+						// Strokes in the world have a width on the ground, so the brush is a circle on the ground.
+						drawGroundCircle(graphics, cursorTileX, cursorTileY, cursorSub,
+							SceneStrokes.worldWidth(strokeSize, config.scaleWidthWithZoom(), client.getScale()) / 2);
 					} else {
 						// A circle with the size of the brush on the screen.
 						graphics.draw(new Ellipse2D.Float(ground.x - size / 2, ground.y - size / 2, size, size));
@@ -828,6 +837,10 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	}
 
 	@Subscribe public void onGameStateChanged(GameStateChanged e) {
+		if (e.getGameState() == GameState.LOADING) {
+			// The ground heights of the new scene are not the same, so the strokes in the world are made again.
+			sceneStrokes.sceneChanged();
+		}
 		// The scene base is final only after the scene loads.
 		if (e.getGameState() != GameState.LOGGED_IN) return;
 
@@ -1152,7 +1165,31 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			eraseOwnStrokes(worldView, regions, pf(mx, my), style);
 		}
 
-		// Only the strokes on the player's floor show.
+		collectStrokes(worldView, regions, visibleStrokes);
+		try
+		{
+			for (Stroke s : visibleStrokes)
+			{
+				// The renderer draws the strokes in the world. Only their parts past it are drawn here.
+				if (!sceneStrokes.drewWhole(s))
+				{
+					drawStroke(graphics, worldView, s, style, sceneStrokes.drew(s));
+				}
+			}
+		}
+		finally
+		{
+			visibleStrokes.clear();
+		}
+	}
+
+	/**
+	 * Puts the strokes that show into out, in draw order. These are the strokes of all players on the floor of the player,
+	 * from the oldest to the newest, so that a new stroke is on top. If they have more than MAX_DRAWN_POINTS points,
+	 * the oldest strokes are left out.
+	 */
+	private void collectStrokes(WorldView worldView, int[] regions, List<Stroke> out)
+	{
 		int plane = worldView.getPlane();
 		for (int region : regions)
 		{
@@ -1160,34 +1197,95 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			{
 				if ((showOwnStrokes || s == currentStroke) && s.plane == plane)
 				{
-					visibleStrokes.add(s);
+					out.add(s);
 				}
 			}
 		}
-		partySync.forEachVisibleStroke(regions, plane, visibleStrokes::add);
+		partySync.forEachVisibleStroke(regions, plane, out::add);
 
-		// Draw the strokes of all players together, from the oldest to the newest, so that a new stroke is on top.
 		// The strokes are mostly in order already, so the sort is fast.
-		visibleStrokes.sort(Stroke.DRAW_ORDER);
+		out.sort(Stroke.DRAW_ORDER);
+		// Count from the newest stroke back, so that the newest strokes draw if there are too many points.
+		int first = out.size();
+		int points = 0;
+		while (first > 0 && points + out.get(first - 1).pts.size() <= MAX_DRAWN_POINTS)
+		{
+			first--;
+			points += out.get(first).pts.size();
+		}
+		out.subList(0, first).clear();
+	}
+
+	// The strokes for the renderer in this frame. Reused, so it does not make a new list on each frame.
+	private final List<Stroke> worldStrokes = new ArrayList<>();
+
+	/** Puts the strokes in the world before the scene draws, if Draw in the world is on. */
+	@Subscribe public void onBeforeRender(BeforeRender e)
+	{
+		WorldView worldView = client.getTopLevelWorldView();
+		if (!config.drawInWorld() || client.getGameState() != GameState.LOGGED_IN || worldView == null)
+		{
+			sceneStrokes.off();
+			return;
+		}
+		int[] regions = sceneRegions(worldView);
+		collectStrokes(worldView, regions, worldStrokes);
 		try
 		{
-			// Count from the newest stroke back, so that the newest strokes draw if there are too many points.
-			int first = visibleStrokes.size();
-			int points = 0;
-			while (first > 0 && points + visibleStrokes.get(first - 1).pts.size() <= MAX_DRAWN_POINTS)
-			{
-				first--;
-				points += visibleStrokes.get(first).pts.size();
-			}
-			for (int i = first; i < visibleStrokes.size(); i++)
-			{
-				drawStroke(graphics, worldView, visibleStrokes.get(i), style);
-			}
+			float opacity = Math.max(0f, Math.min(1f, config.strokeOpacity() / 100f));
+			sceneStrokes.update(worldView, worldStrokes, currentStroke,
+				SceneStrokes.worldWidth(1, config.scaleWidthWithZoom(), client.getScale()),
+				config.lineStyle(), config.transparentStrokes(), opacity, Math.max(0, config.renderDistance()));
 		}
 		finally
 		{
-			visibleStrokes.clear();
+			worldStrokes.clear();
 		}
+	}
+
+	// The tile and the place in the tile of the mouse, while the player draws. Set in render.
+	private int cursorTileX, cursorTileY;
+	private pf cursorSub = pf(0, 0);
+
+	// Points around the brush circle on the ground.
+	private static final int CIRCLE_POINTS = 32;
+	private final Path2D.Float circle = new Path2D.Float();
+
+	/** Draws a circle with the radius in world units around the place in the world tile, on the ground. */
+	private void drawGroundCircle(Graphics2D graphics, int tileX, int tileY, pf sub, double radius)
+	{
+		WorldView worldView = client.getTopLevelWorldView();
+		LocalPoint center = loadedLocalPoint(worldView, tileX, tileY, worldView.getPlane());
+		if (center == null)
+		{
+			return;
+		}
+		double cx = center.getX() - Perspective.LOCAL_HALF_TILE_SIZE + sub.x * Perspective.LOCAL_TILE_SIZE;
+		double cy = center.getY() - Perspective.LOCAL_HALF_TILE_SIZE + sub.y * Perspective.LOCAL_TILE_SIZE;
+		circle.reset();
+		boolean started = false;
+		for (int i = 0; i <= CIRCLE_POINTS; i++)
+		{
+			double angle = 2 * Math.PI * i / CIRCLE_POINTS;
+			LocalPoint lp = new LocalPoint((int) Math.round(cx + Math.cos(angle) * radius),
+				(int) Math.round(cy + Math.sin(angle) * radius), worldView);
+			Point p = Perspective.localToCanvas(client, lp, worldView.getPlane());
+			if (p == null)
+			{
+				started = false;
+				continue;
+			}
+			if (started)
+			{
+				circle.lineTo(p.getX(), p.getY());
+			}
+			else
+			{
+				circle.moveTo(p.getX(), p.getY());
+				started = true;
+			}
+		}
+		graphics.draw(circle);
 	}
 
 	/** Removes and saves the local player's shown strokes that are near the point, and tells party members. */
@@ -1201,7 +1299,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			List<Stroke> toErase = null;
 			for (Stroke s : strokes)
 			{
-				if ((showOwnStrokes || s == currentStroke) && s.plane == plane && buildPath(worldView, s, eraseAt, style))
+				if ((showOwnStrokes || s == currentStroke) && s.plane == plane && buildPath(worldView, s, eraseAt, style, false))
 				{
 					if (toErase == null)
 					{
@@ -1308,16 +1406,20 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 	}
 
-	private void drawStroke(Graphics2D graphics, WorldView worldView, Stroke s, LineStyle style)
+	/** Draws the stroke. If skipCovered is true, the points on tiles that the renderer draws in the world do not draw. */
+	private void drawStroke(Graphics2D graphics, WorldView worldView, Stroke s, LineStyle style, boolean skipCovered)
 	{
-		buildPath(worldView, s, null, style);
+		buildPath(worldView, s, null, style, skipCovered);
 		graphics.setColor(transparentStrokes ? s.color : s.opaqueColor());
 		graphics.setStroke(basicStroke(screenWidth(s.strokeWidth)));
 		graphics.draw(path);
 	}
 
-	/** Puts the stroke with the current camera in path. If eraseAt is not null, returns true when the stroke is near that point. */
-	private boolean buildPath(WorldView worldView, Stroke s, pf eraseAt, LineStyle style)
+	/**
+	 * Puts the stroke with the current camera in path. If eraseAt is not null, returns true when the stroke is near that point.
+	 * If skipCovered is true, the points on tiles that the renderer draws in the world are left out.
+	 */
+	private boolean buildPath(WorldView worldView, Stroke s, pf eraseAt, LineStyle style, boolean skipCovered)
 	{
 		boolean hit = false;
 		path.reset();
@@ -1332,7 +1434,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			{
 				tileX = p.getX();
 				tileY = p.getY();
-				LocalPoint lp = isInRenderDistance(worldView, tileX, tileY) ? loadedLocalPoint(worldView, tileX, tileY, s.plane) : null;
+				LocalPoint lp = isInRenderDistance(worldView, tileX, tileY) && !(skipCovered && sceneStrokes.coversTile(tileX, tileY))
+					? loadedLocalPoint(worldView, tileX, tileY, s.plane) : null;
 				poly = lp != null ? Perspective.getCanvasTilePoly(client, lp) : null;
 			}
 

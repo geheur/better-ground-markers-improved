@@ -81,11 +81,23 @@ public interface RsPaintConfig extends Config
 	String renderingSection = "rendering";
 
 	@ConfigItem(
+		keyName = "drawInWorld",
+		name = "Draw in the world",
+		description = "With the GPU plugin or 117 HD, strokes are part of the game world. Your character, other players, NPCs, objects and projectiles show in front of them, and strokes keep their width on the ground. If this is off, or without these plugins, strokes show over the game.",
+		section = renderingSection,
+		position = 0
+	)
+	default boolean drawInWorld()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "lineStyle",
 		name = "Line style",
 		description = "Straight connects the points with straight lines. Smooth draws curves near the points and hides small steps. Smooth through points draws curves that touch each point.",
 		section = renderingSection,
-		position = 0
+		position = 1
 	)
 	default LineStyle lineStyle()
 	{
@@ -95,9 +107,9 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "antialiasing",
 		name = "Smooth edges",
-		description = "Draws strokes with antialiasing (soft line edges).",
+		description = "Draws strokes over the game with antialiasing (soft line edges). For strokes in the world, the anti-aliasing setting of the GPU plugin or 117 HD applies.",
 		section = renderingSection,
-		position = 1
+		position = 2
 	)
 	default boolean antialiasing()
 	{
@@ -109,7 +121,7 @@ public interface RsPaintConfig extends Config
 		name = "Scale width with zoom",
 		description = "Makes strokes wider when you zoom in and thinner when you zoom out, so that they keep their size on the ground. The stroke size on the toolbar is the width at the default zoom in fixed mode.",
 		section = renderingSection,
-		position = 2
+		position = 3
 	)
 	default boolean scaleWidthWithZoom()
 	{
@@ -121,7 +133,7 @@ public interface RsPaintConfig extends Config
 		name = "Transparent strokes",
 		description = "Lets the game show through strokes that have a transparent color, and through all strokes if Stroke opacity is less than 100%. Where a stroke crosses itself, it does not get darker. Where a stroke crosses an older stroke, the colors mix. If this is off, all strokes are opaque.",
 		section = renderingSection,
-		position = 3
+		position = 4
 	)
 	default boolean transparentStrokes()
 	{
@@ -135,7 +147,7 @@ public interface RsPaintConfig extends Config
 		name = "Stroke opacity",
 		description = "Changes the opacity of all strokes, if Transparent strokes is on. It multiplies the opacity of each stroke color. At 100%, each stroke keeps the opacity of its color.",
 		section = renderingSection,
-		position = 4
+		position = 5
 	)
 	default int strokeOpacity()
 	{
@@ -148,7 +160,7 @@ public interface RsPaintConfig extends Config
 		name = "Render distance",
 		description = "Strokes show only on tiles that are up to this many tiles from the camera, like Draw Distance in the GPU plugin. At 0, strokes show on all loaded tiles.",
 		section = renderingSection,
-		position = 5
+		position = 6
 	)
 	default int renderDistance()
 	{
