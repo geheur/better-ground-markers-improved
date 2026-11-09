@@ -332,11 +332,12 @@ class SceneStrokes
 		{
 			Entry e = entries.computeIfAbsent(s, k -> new Entry());
 			e.seenFrame = frame;
-			if (!e.update(s, worldWidth(s.strokeWidth, scaleWithZoom, scale), style, s.rainbow, s == current ? Long.MAX_VALUE : deadline))
+			int alpha = transparent ? Math.round(s.color.getAlpha() * opacity) : 255;
+			if (!e.update(s, worldWidth(s.strokeWidth, scaleWithZoom, scale), style, s.rainbow, alpha < 255 || s.rainbow,
+				s == current ? Long.MAX_VALUE : deadline))
 			{
 				continue;
 			}
-			int alpha = transparent ? Math.round(s.color.getAlpha() * opacity) : 255;
 			if (alpha <= 0)
 			{
 				// Nothing to draw, in the world or over it.
@@ -1037,9 +1038,14 @@ class SceneStrokes
 		private int wholeSize;
 		// The point count of the mesh that the worker makes.
 		private int pendingSize;
-		// The meshes for the last width or style. They show until the new meshes are complete, so a new width (a zoom
-		// with Scale width with zoom off) or style does not move strokes over the game for some frames.
+		// The meshes for the last width, style or points. They show until the new meshes are ready (showsStale), so a new
+		// width (a zoom with Scale width with zoom off), a new style or the simplified points of a finished stroke do not
+		// move the stroke over the game or show it in flickering parts for some frames.
 		private List<StrokeMesher.Mesh> stale;
+		// Whether stale is the mesh of older points, then parts of newer points (hasTail).
+		private boolean staleTail;
+		// Whether the stroke needs one mesh of all points, as given to update.
+		private boolean wantsWhole;
 		private Future<StrokeMesher.Mesh> pending;
 		double minX, minY, maxX, maxY;
 		// The color layers (FlatModel.layers) and what they are for, so they are not found again on each frame.
@@ -1062,14 +1068,20 @@ class SceneStrokes
 			return layers;
 		}
 
-		/** Makes the meshes that the stroke needs, until the deadline. Returns true if the stroke has meshes for all points. */
-		boolean update(Stroke s, double width, LineStyle style, boolean rainbow, long deadline)
+		/**
+		 * Makes the meshes that the stroke needs, until the deadline. Returns true if the stroke has meshes to show.
+		 * wantsWhole is true for a stroke that needs one mesh of all points (wantWhole).
+		 */
+		boolean update(Stroke s, double width, LineStyle style, boolean rainbow, boolean wantsWhole, long deadline)
 		{
+			this.wantsWhole = wantsWhole;
 			if (s.pts != pts || width != this.width || style != this.style || rainbow != this.rainbow
 				|| generation != SceneStrokes.this.generation || s.pts.size() < size)
 			{
-				// Only the width or the style changed, so the old meshes are still in the right place.
-				boolean keep = s.pts == pts && s.pts.size() == size && generation == SceneStrokes.this.generation;
+				// The old meshes are still in about the right place: the width or the style changed, or the stroke got new
+				// points of the same line, as when the player lets go and the points are simplified. They show until the new
+				// meshes are ready, so the stroke does not show over the game or flicker in parts for some frames.
+				boolean keep = generation == SceneStrokes.this.generation && (s.pts != pts || s.pts.size() == size);
 				if (!keep)
 				{
 					stale = null;
@@ -1077,6 +1089,7 @@ class SceneStrokes
 				else if (complete)
 				{
 					stale = new ArrayList<>(meshes());
+					staleTail = hasTail();
 				}
 				pts = s.pts;
 				this.width = width;
@@ -1128,7 +1141,10 @@ class SceneStrokes
 					chunks.add(mesh);
 				}
 				complete = true;
-				stale = null;
+				if (!waitsForWhole())
+				{
+					stale = null;
+				}
 				box(chunks);
 				version++;
 			}
@@ -1144,6 +1160,7 @@ class SceneStrokes
 						if (wholeSize >= size)
 						{
 							box(Collections.singletonList(whole));
+							stale = null;
 						}
 						version++;
 					}
@@ -1189,11 +1206,11 @@ class SceneStrokes
 
 		List<StrokeMesher.Mesh> meshes()
 		{
-			if (!complete)
+			if (showsStale())
 			{
-				return stale != null ? stale : chunks;
+				return stale;
 			}
-			if (whole == null)
+			if (!complete || whole == null)
 			{
 				return chunks;
 			}
@@ -1211,7 +1228,23 @@ class SceneStrokes
 		/** True if meshes() is the mesh of the older points, then the parts of the newer points, one level higher. */
 		boolean hasTail()
 		{
+			if (showsStale())
+			{
+				return staleTail;
+			}
 			return complete && whole != null && wholeSize < size && !chunks.isEmpty();
+		}
+
+		/** True if the old meshes show, because the new ones are not ready. */
+		private boolean showsStale()
+		{
+			return stale != null && (!complete || waitsForWhole());
+		}
+
+		/** True if the parts are made, but the stroke waits for its mesh of all points before they show. */
+		private boolean waitsForWhole()
+		{
+			return wantsWhole && chunks.size() > 1 && worker != null && (whole == null || wholeSize < size);
 		}
 
 		/** The levels that the stroke uses: 2 with a tail, else 1. */
@@ -1228,8 +1261,9 @@ class SceneStrokes
 		 */
 		void wantWhole(boolean drawing)
 		{
+			// A stroke that shows its old meshes needs the new mesh at once.
 			if (!complete || pending != null || chunks.size() <= 1 || worker == null || whole != null && wholeSize >= size
-				|| !drawing && frame - changedFrame < STABLE_FRAMES)
+				|| !drawing && stale == null && frame - changedFrame < STABLE_FRAMES)
 			{
 				return;
 			}
