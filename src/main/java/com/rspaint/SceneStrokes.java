@@ -50,12 +50,14 @@ import net.runelite.client.plugins.PluginManager;
 @Singleton
 class SceneStrokes
 {
-	/**
-	 * A stroke with the stored width w is w * REFERENCE_DEPTH / REFERENCE_SCALE world units wide. Thus at the default zoom
-	 * of fixed mode (scale 512), a stroke is w pixels wide where the ground is REFERENCE_DEPTH from the camera, which is
-	 * about the distance of the player.
+	/*
+	 * A stroke with the stored width w is w * REFERENCE_DEPTH / REFERENCE_SCALE world units wide, so its width on the
+	 * ground does not change with the camera. Where the ground is REFERENCE_DEPTH from the camera, it has the same width
+	 * on the screen as over the game. That is about the depth of the ground at the player with the camera pitched up.
+	 * When the camera pitches down, it moves nearer to the player, so strokes in the world look a little wider than
+	 * over the game.
 	 */
-	static final float REFERENCE_DEPTH = 1200;
+	static final float REFERENCE_DEPTH = 2800;
 	static final float REFERENCE_SCALE = 512;
 
 	/**
@@ -79,17 +81,35 @@ class SceneStrokes
 	private static final float BASE_LIFT = 6;
 	private static final float LIFT_STEP = 0.25f;
 	private static final int MAX_LEVEL = 120;
+	/*
+	 * The lift in far zones. Their models are opaque, so the depth buffer puts the newer stroke on top, not the draw
+	 * order. Far from the camera, the depth buffer cannot separate the small steps.
+	 */
+	private static final float FAR_BASE_LIFT = 12;
+	private static final float FAR_LIFT_STEP = 1;
 
 	/*
-	 * The bounds radius of all models. The GPU plugin does not draw a transparent model with a diameter of 6000 or more,
-	 * and the bounds are about 2.83 times the radius across. A zone is 1024 units across, and its models stand on a tile
-	 * in the scene, also for the zones just past the scene edge.
+	 * The bounds radius of the transparent models. The GPU plugin does not draw a transparent model with a diameter of
+	 * 6000 or more, and the bounds are about 2.83 times the radius across. A zone is 1024 units across, and its models
+	 * stand on a tile in the scene, also for the zones just past the scene edge.
 	 */
 	private static final int RADIUS = 2000;
 
-	// The zones past each edge of the scene that get models. The models stand on the nearest scene tile, so a zone
-	// further out is too far from them for the radius. Strokes there show over the game.
+	// The zones past each edge of the scene that get transparent models. The client puts objects only on scene tiles, so
+	// the models of a zone further out stand too far from it for the radius.
 	private static final int OUTSIDE_ZONES = 1;
+
+	/*
+	 * The zones past each edge of the scene that get opaque models: the extended scene of the GPU plugin. Opaque models
+	 * have no size limit, so they can stand on a scene tile far from their strokes. Only opaque strokes show there in the
+	 * world. Transparent strokes and strokes with a white layer show over the game there.
+	 */
+	private static final int FAR_ZONES = (Constants.EXTENDED_SCENE_SIZE - Constants.SCENE_SIZE) / 2 / StrokeMesher.ZONE_TILES;
+	// The bounds radius of the opaque models: from a tile near the scene edge to the far corner of a far zone.
+	private static final int FAR_RADIUS = 10_000;
+
+	// How a zone shows its strokes in this frame (zoneReach).
+	private static final int HIDDEN = 0, NEAR = 1, FAR = 2;
 
 	// Spare models that are kept for later zones.
 	private static final int MAX_SPARES = 64;
@@ -119,11 +139,17 @@ class SceneStrokes
 	// The strokes that show in the world in this frame, and those that show only in the world.
 	private final Set<Stroke> drawn = Collections.newSetFromMap(new IdentityHashMap<>());
 	private final Set<Stroke> drawnWhole = Collections.newSetFromMap(new IdentityHashMap<>());
+	// The strokes in drawn that also show in the far zones, because they are opaque.
+	private final Set<Stroke> drawnFar = Collections.newSetFromMap(new IdentityHashMap<>());
+	// Whether opaque models can be made in this frame, so the far zones show.
+	private boolean farZones;
 	// The strokes in this frame that have meshes, in draw order, and their levels. The last frame's for levels().
 	private List<Entry> shown = new ArrayList<>();
 	private List<Entry> lastShown = new ArrayList<>();
 	private int[] levels = new int[64];
 	private int[] lastVersions = new int[64];
+	// The color layers of each rainbow step, for rainbowAlpha, rainbowCap and rainbowGamma. Null to make them again.
+	private RainbowLayers rainbowLayers;
 
 	private WorldView worldView;
 	private int baseX, baseY, sizeX, sizeY, plane;
@@ -189,13 +215,21 @@ class SceneStrokes
 		return active && drawnWhole.contains(stroke);
 	}
 
-	/** Returns true if the world tile is drawn in the world in this frame, for strokes for which drew is true. */
-	boolean coversTile(int worldX, int worldY)
+	/** Returns true if the part of the stroke on the world tile shows in the world in this frame. */
+	boolean coversTile(Stroke stroke, int worldX, int worldY)
 	{
-		return active && zoneShown(Math.floorDiv(worldX, StrokeMesher.ZONE_TILES), Math.floorDiv(worldY, StrokeMesher.ZONE_TILES));
+		if (!active || !drawn.contains(stroke))
+		{
+			return false;
+		}
+		int reach = zoneReach(Math.floorDiv(worldX, StrokeMesher.ZONE_TILES), Math.floorDiv(worldY, StrokeMesher.ZONE_TILES));
+		return reach == NEAR || reach == FAR && drawnFar.contains(stroke);
 	}
 
-	/** Returns the width in world units of a stroke with this stored width. */
+	/**
+	 * Returns the width in world units of a stroke with this stored width. Where the ground is REFERENCE_DEPTH from the
+	 * camera, the stroke has the width on the screen that the overlay gives it.
+	 */
 	static double worldWidth(double width, boolean scaleWithZoom, int scale)
 	{
 		return width * REFERENCE_DEPTH / (scaleWithZoom || scale <= 0 ? REFERENCE_SCALE : scale);
@@ -259,7 +293,7 @@ class SceneStrokes
 	 * Puts the strokes in the world for the next frame. The strokes are in draw order, from the oldest to the newest.
 	 * Call it before the scene draws. Strokes that cannot show in the world in this frame show over the game.
 	 */
-	void update(WorldView wv, List<Stroke> strokes, Stroke current, double worldPerWidth, LineStyle style,
+	void update(WorldView wv, List<Stroke> strokes, Stroke current, boolean scaleWithZoom, int scale, LineStyle style,
 		boolean transparent, float opacity, int renderDistance)
 	{
 		if (wv == null || !client.isGpu() || worker == null)
@@ -271,6 +305,8 @@ class SceneStrokes
 		carriers.nextFrame();
 		drawn.clear();
 		drawnWhole.clear();
+		drawnFar.clear();
+		farZones = carriers.canMakeOpaque();
 		if (wv != worldView || wv.getBaseX() != baseX || wv.getBaseY() != baseY || wv.getSizeX() != sizeX
 			|| wv.getSizeY() != sizeY || wv.getPlane() != plane)
 		{
@@ -296,7 +332,7 @@ class SceneStrokes
 		{
 			Entry e = entries.computeIfAbsent(s, k -> new Entry());
 			e.seenFrame = frame;
-			if (!e.update(s, s.strokeWidth * worldPerWidth, style, s == current ? Long.MAX_VALUE : deadline))
+			if (!e.update(s, worldWidth(s.strokeWidth, scaleWithZoom, scale), style, s.rainbow, s == current ? Long.MAX_VALUE : deadline))
 			{
 				continue;
 			}
@@ -307,8 +343,10 @@ class SceneStrokes
 				drawnWhole.add(s);
 				continue;
 			}
-			if (alpha < 255)
+			if (alpha < 255 || s.rainbow)
 			{
+				// A rainbow stroke that crosses itself in two parts would have two colors at one place and one height, so
+				// they would flicker. One mesh of all points has each place once.
 				e.wantWhole();
 			}
 			e.stroke = s;
@@ -323,6 +361,7 @@ class SceneStrokes
 			clear();
 			drawn.clear();
 			drawnWhole.clear();
+			drawnFar.clear();
 			active = false;
 			return;
 		}
@@ -339,6 +378,7 @@ class SceneStrokes
 		frame++;
 		drawn.clear();
 		drawnWhole.clear();
+		drawnFar.clear();
 		if (active || !zones.isEmpty())
 		{
 			clear();
@@ -381,24 +421,42 @@ class SceneStrokes
 		}
 	}
 
-	private boolean zoneShown(int zoneX, int zoneY)
+	/** Returns true if the zone is in the scene or at most OUTSIDE_ZONES past its edge, so it gets transparent models. */
+	private boolean isNear(int zoneX, int zoneY)
+	{
+		return inScene(zoneX, zoneY, OUTSIDE_ZONES);
+	}
+
+	private boolean inScene(int zoneX, int zoneY, int outsideZones)
 	{
 		int sceneX = zoneX * StrokeMesher.ZONE_TILES - baseX;
 		int sceneY = zoneY * StrokeMesher.ZONE_TILES - baseY;
-		int outside = OUTSIDE_ZONES * StrokeMesher.ZONE_TILES;
-		if (sceneX < -outside || sceneY < -outside || sceneX >= sizeX + outside || sceneY >= sizeY + outside)
+		int outside = outsideZones * StrokeMesher.ZONE_TILES;
+		return sceneX >= -outside && sceneY >= -outside && sceneX < sizeX + outside && sceneY < sizeY + outside;
+	}
+
+	/**
+	 * Returns how the zone shows strokes in this frame: NEAR for all strokes, FAR for opaque strokes only, or HIDDEN.
+	 * Strokes in a HIDDEN zone show over the game.
+	 */
+	private int zoneReach(int zoneX, int zoneY)
+	{
+		int reach = isNear(zoneX, zoneY) ? NEAR : farZones && inScene(zoneX, zoneY, FAR_ZONES) ? FAR : HIDDEN;
+		if (reach == HIDDEN || renderDistance <= 0)
 		{
-			return false;
-		}
-		if (renderDistance <= 0)
-		{
-			return true;
+			return reach;
 		}
 		// Like the render distance of the overlay, a square around the camera tile. A zone shows if a tile of it is in the square.
 		int minX = zoneX * StrokeMesher.ZONE_TILES, minY = zoneY * StrokeMesher.ZONE_TILES;
 		int maxX = minX + StrokeMesher.ZONE_TILES - 1, maxY = minY + StrokeMesher.ZONE_TILES - 1;
 		return maxX >= cameraTileX - renderDistance && minX <= cameraTileX + renderDistance
-			&& maxY >= cameraTileY - renderDistance && minY <= cameraTileY + renderDistance;
+			&& maxY >= cameraTileY - renderDistance && minY <= cameraTileY + renderDistance ? reach : HIDDEN;
+	}
+
+	/** Returns true if a stroke with these layers can show in a zone with this reach. */
+	private static boolean shows(int reach, boolean opaque)
+	{
+		return reach == NEAR || reach == FAR && opaque;
 	}
 
 	/** Puts the pieces of the shown strokes in their zones, and writes the zones that changed. Returns false on failure. */
@@ -409,14 +467,16 @@ class SceneStrokes
 		for (int j = 0; j < shown.size(); j++)
 		{
 			Entry e = shown.get(j);
-			float lift = BASE_LIFT + levels[j] * LIFT_STEP;
 			int[] layers = e.layers(cap, gamma);
+			RainbowLayers rainbow = e.stroke.rainbow ? rainbowLayers(e.alpha, cap, gamma) : null;
+			// Far zones have opaque models, so only strokes without alpha and without a white layer show there.
+			boolean opaque = rainbow != null ? rainbow.opaque : layers[1] >= 255 && layers[2] <= 0;
 			boolean whole = true;
 			for (StrokeMesher.Mesh mesh : e.meshes())
 			{
 				for (StrokeMesher.Piece piece : mesh.pieces)
 				{
-					if (!zoneShown(piece.zoneX, piece.zoneY))
+					if (!shows(zoneReach(piece.zoneX, piece.zoneY), opaque))
 					{
 						whole = false;
 						continue;
@@ -428,12 +488,16 @@ class SceneStrokes
 						zone = new Zone(piece.zoneX, piece.zoneY);
 						zones.put(key, zone);
 					}
-					zone.add(frame, piece, lift, layers[0], layers[1], layers[2]);
+					zone.add(frame, piece, levels[j], layers[0], layers[1], layers[2], piece.d != null ? rainbow : null);
 				}
 			}
 			// Points on tiles past the zones with models show over the game. Points on tiles without ground show nowhere.
-			whole = whole && boxShown(e);
+			whole = whole && boxShown(e, opaque);
 			drawn.add(e.stroke);
+			if (opaque)
+			{
+				drawnFar.add(e.stroke);
+			}
 			if (whole)
 			{
 				drawnWhole.add(e.stroke);
@@ -464,14 +528,62 @@ class SceneStrokes
 		return ok;
 	}
 
-	/** Returns true if all tiles in the box of the stroke are in zones that show. */
-	private boolean boxShown(Entry e)
+	/** Returns the color layers of the rainbow steps for the alpha, made again only when the alpha, cap or gamma change. */
+	private RainbowLayers rainbowLayers(int alpha, boolean cap, float gamma)
+	{
+		RainbowLayers r = rainbowLayers;
+		if (r == null || r.alpha != alpha || r.cap != cap || Float.compare(r.gamma, gamma) != 0)
+		{
+			r = new RainbowLayers(alpha, cap, gamma);
+			rainbowLayers = r;
+		}
+		return r;
+	}
+
+	/** The color layers (FlatModel.layers) of each step of the rainbow. */
+	private static final class RainbowLayers
+	{
+		final int alpha;
+		final boolean cap;
+		final float gamma;
+		final int[] hsl = new int[Rainbow.STEPS], colorAlpha = new int[Rainbow.STEPS], white = new int[Rainbow.STEPS];
+		// True if some step has a white layer.
+		final boolean hasWhite;
+		// True if no step has alpha or a white layer, so the rainbow can show in the far zones.
+		final boolean opaque;
+		// Changes the hash of a zone when the colors change.
+		final long key;
+
+		RainbowLayers(int alpha, boolean cap, float gamma)
+		{
+			this.alpha = alpha;
+			this.cap = cap;
+			this.gamma = gamma;
+			int[] layers = new int[3];
+			boolean anyWhite = false, allOpaque = true;
+			for (int i = 0; i < Rainbow.STEPS; i++)
+			{
+				FlatModel.layers(Rainbow.color(i), alpha, cap, gamma, layers);
+				hsl[i] = layers[0];
+				colorAlpha[i] = layers[1];
+				white[i] = layers[2];
+				anyWhite |= layers[2] > 0;
+				allOpaque &= layers[1] >= 255 && layers[2] <= 0;
+			}
+			hasWhite = anyWhite;
+			opaque = allOpaque;
+			key = (long) Float.floatToIntBits(gamma) << 32 | alpha << 1 | (cap ? 1 : 0);
+		}
+	}
+
+	/** Returns true if all tiles in the box of the stroke are in zones that show it. */
+	private boolean boxShown(Entry e, boolean opaque)
 	{
 		int minX = Math.floorDiv((int) Math.floor(e.minX / StrokeMesher.TILE), StrokeMesher.ZONE_TILES);
 		int maxX = Math.floorDiv((int) Math.floor(e.maxX / StrokeMesher.TILE), StrokeMesher.ZONE_TILES);
 		int minY = Math.floorDiv((int) Math.floor(e.minY / StrokeMesher.TILE), StrokeMesher.ZONE_TILES);
 		int maxY = Math.floorDiv((int) Math.floor(e.maxY / StrokeMesher.TILE), StrokeMesher.ZONE_TILES);
-		return zoneShown(minX, minY) && zoneShown(maxX, maxY);
+		return shows(zoneReach(minX, minY), opaque) && shows(zoneReach(maxX, maxY), opaque);
 	}
 
 	/** Takes all models out of the scene. They stay as spares. */
@@ -490,23 +602,26 @@ class SceneStrokes
 	private static final class Carrier
 	{
 		final Model model;
+		// An opaque model for a far zone, with FAR_RADIUS bounds. Else a transparent model with RADIUS bounds.
+		final boolean opaque;
 		int usedFaces, usedVertices;
 		int freedFrame;
 
-		Carrier(Model model)
+		Carrier(Model model, boolean opaque)
 		{
 			this.model = model;
+			this.opaque = opaque;
 		}
 	}
 
-	/** Returns a model with room for the vertices and faces, or null if none can be made now. */
-	private Carrier obtain(int vertices, int faces)
+	/** Returns a model of this kind with room for the vertices and faces, or null if none can be made now. */
+	private Carrier obtain(int vertices, int faces, boolean opaque)
 	{
 		Carrier best = null;
 		for (Carrier c : spares)
 		{
 			// A much larger model costs time in each frame for its hidden faces.
-			if (frame - c.freedFrame >= SPARE_FRAMES && c.model.getVerticesCount() >= vertices && c.model.getFaceCount() >= faces
+			if (c.opaque == opaque && frame - c.freedFrame >= SPARE_FRAMES && c.model.getVerticesCount() >= vertices && c.model.getFaceCount() >= faces
 				&& c.model.getFaceCount() <= Math.max(faces * 4, 600)
 				&& (best == null || c.model.getFaceCount() < best.model.getFaceCount()))
 			{
@@ -526,14 +641,14 @@ class SceneStrokes
 			wantVertices = vertices;
 			wantFaces = faces;
 		}
-		Model model = carriers.create(wantVertices, wantFaces, RADIUS);
+		Model model = carriers.create(wantVertices, wantFaces, opaque ? FAR_RADIUS : RADIUS, !opaque);
 		if (model == null)
 		{
 			return null;
 		}
 		// The normals point up, so 117 HD lights the strokes like flat ground.
 		FlatModel.normals(model);
-		Carrier carrier = new Carrier(model);
+		Carrier carrier = new Carrier(model, opaque);
 		// Six vertices fixed the bounds.
 		carrier.usedVertices = 6;
 		return carrier;
@@ -552,11 +667,15 @@ class SceneStrokes
 	private final class Zone
 	{
 		final int zoneX, zoneY;
+		// A far zone has opaque models that stand near the scene edge (see anchorTile). It holds only opaque strokes.
+		final boolean far;
 		int frame;
 		// The pieces in draw order, with the lift, the color and the alpha of their stroke.
 		StrokeMesher.Piece[] pieces = new StrokeMesher.Piece[16];
 		float[] lifts = new float[16];
 		int[] colors = new int[16], alphas = new int[16], whites = new int[16];
+		// The rainbow colors of a piece with vertex distances, or null for a piece with one color.
+		RainbowLayers[] rainbows = new RainbowLayers[16];
 		int items;
 		long hash, writtenHash;
 		final List<Part> parts = new ArrayList<>();
@@ -565,10 +684,12 @@ class SceneStrokes
 		{
 			this.zoneX = zoneX;
 			this.zoneY = zoneY;
+			far = !isNear(zoneX, zoneY);
 		}
 
-		void add(int frame, StrokeMesher.Piece piece, float lift, int color, int alpha, int white)
+		void add(int frame, StrokeMesher.Piece piece, int level, int color, int alpha, int white, RainbowLayers rainbow)
 		{
+			float lift = far ? FAR_BASE_LIFT + level * FAR_LIFT_STEP : BASE_LIFT + level * LIFT_STEP;
 			if (this.frame != frame)
 			{
 				this.frame = frame;
@@ -583,21 +704,25 @@ class SceneStrokes
 				colors = java.util.Arrays.copyOf(colors, n);
 				alphas = java.util.Arrays.copyOf(alphas, n);
 				whites = java.util.Arrays.copyOf(whites, n);
+				rainbows = java.util.Arrays.copyOf(rainbows, n);
 			}
 			pieces[items] = piece;
 			lifts[items] = lift;
 			colors[items] = color;
 			alphas[items] = alpha;
 			whites[items] = white;
+			rainbows[items] = rainbow;
 			items++;
 			hash = mix(hash, piece.id);
 			hash = mix(hash, Float.floatToIntBits(lift));
-			hash = mix(hash, (long) color << 16 | alpha << 8 | white);
+			hash = mix(hash, rainbow != null ? rainbow.key : (long) color << 16 | alpha << 8 | white);
 		}
 
 		// Scratch for one model: vertices in local units, faces, and their colors.
 		private float[] vx = new float[256], vy = new float[256], vz = new float[256];
-		private int[] fa = new int[256], fb = new int[256], fc = new int[256], fColor = new int[256], fAlpha = new int[256];
+		private int[] fa = new int[256], fb = new int[256], fc = new int[256], fAlpha = new int[256];
+		// The color of each corner of each face. Equal for a face with one color.
+		private int[] fColorA = new int[256], fColorB = new int[256], fColorC = new int[256];
 		private int vertices, faces;
 
 		/** Writes the pieces into the models of the zone. Returns false if a model cannot be made. */
@@ -612,7 +737,9 @@ class SceneStrokes
 			for (int i = 0; i < items; i++)
 			{
 				StrokeMesher.Piece piece = pieces[i];
-				int layerCount = whites[i] > 0 ? 2 : 1;
+				RainbowLayers rainbow = rainbows[i];
+				boolean white = rainbow != null ? rainbow.hasWhite : whites[i] > 0;
+				int layerCount = white ? 2 : 1;
 				int first = 0;
 				for (int k = 0; k < piece.polygons; k++)
 				{
@@ -624,10 +751,10 @@ class SceneStrokes
 							return false;
 						}
 					}
-					polygon(piece, first, n, originX, originY, lifts[i], colors[i], alphas[i]);
-					if (whites[i] > 0)
+					polygon(piece, first, n, originX, originY, lifts[i], colors[i], alphas[i], rainbow, false);
+					if (white)
 					{
-						polygon(piece, first, n, originX, originY, lifts[i] + LIFT_STEP / 2, FlatModel.WHITE, whites[i]);
+						polygon(piece, first, n, originX, originY, lifts[i] + LIFT_STEP / 2, FlatModel.WHITE, whites[i], rainbow, true);
 					}
 					first += n;
 				}
@@ -643,8 +770,12 @@ class SceneStrokes
 			return true;
 		}
 
-		/** Adds the polygon as faces with their front side up. */
-		private void polygon(StrokeMesher.Piece piece, int first, int n, float originX, float originY, float lift, int color, int alpha)
+		/**
+		 * Adds the polygon as faces with their front side up. With rainbow colors, each vertex has the color of its distance
+		 * along the line, and a face has the mean alpha of its corners. whiteLayer makes the white layer of the colors.
+		 */
+		private void polygon(StrokeMesher.Piece piece, int first, int n, float originX, float originY, float lift, int color, int alpha,
+			RainbowLayers rainbow, boolean whiteLayer)
 		{
 			ensure(vertices + n, faces + n - 2);
 			double area = 0;
@@ -662,11 +793,27 @@ class SceneStrokes
 			boolean clockwise = area < 0;
 			for (int j = 1; j < n - 1; j++)
 			{
+				int b = clockwise ? j + 1 : j;
+				int c = clockwise ? j : j + 1;
 				fa[faces] = vertices;
-				fb[faces] = vertices + (clockwise ? j + 1 : j);
-				fc[faces] = vertices + (clockwise ? j : j + 1);
-				fColor[faces] = color;
-				fAlpha[faces] = alpha;
+				fb[faces] = vertices + b;
+				fc[faces] = vertices + c;
+				if (rainbow == null)
+				{
+					fColorA[faces] = fColorB[faces] = fColorC[faces] = color;
+					fAlpha[faces] = alpha;
+				}
+				else
+				{
+					int sa = Rainbow.step(piece.d[first]);
+					int sb = Rainbow.step(piece.d[first + b]);
+					int sc = Rainbow.step(piece.d[first + c]);
+					int[] alphas = whiteLayer ? rainbow.white : rainbow.colorAlpha;
+					fColorA[faces] = whiteLayer ? FlatModel.WHITE : rainbow.hsl[sa];
+					fColorB[faces] = whiteLayer ? FlatModel.WHITE : rainbow.hsl[sb];
+					fColorC[faces] = whiteLayer ? FlatModel.WHITE : rainbow.hsl[sc];
+					fAlpha[faces] = (alphas[sa] + alphas[sb] + alphas[sc] + 1) / 3;
+				}
 				faces++;
 			}
 			vertices += n;
@@ -687,7 +834,9 @@ class SceneStrokes
 				fa = java.util.Arrays.copyOf(fa, n);
 				fb = java.util.Arrays.copyOf(fb, n);
 				fc = java.util.Arrays.copyOf(fc, n);
-				fColor = java.util.Arrays.copyOf(fColor, n);
+				fColorA = java.util.Arrays.copyOf(fColorA, n);
+				fColorB = java.util.Arrays.copyOf(fColorB, n);
+				fColorC = java.util.Arrays.copyOf(fColorC, n);
 				fAlpha = java.util.Arrays.copyOf(fAlpha, n);
 			}
 		}
@@ -701,11 +850,12 @@ class SceneStrokes
 			}
 			Part part = parts.get(index);
 			// Each model stands on its own tile of the zone, because the client draws only a few objects on one tile.
-			// Zones past the scene edge stand on the nearest scene tile.
-			int tileX = Math.max(0, Math.min(sizeX - 1, zoneX * StrokeMesher.ZONE_TILES - baseX + index % StrokeMesher.ZONE_TILES));
-			int tileY = Math.max(0, Math.min(sizeY - 1, zoneY * StrokeMesher.ZONE_TILES - baseY + index / StrokeMesher.ZONE_TILES % StrokeMesher.ZONE_TILES));
+			// Zones past the scene edge stand on a scene tile near it.
+			int tileX = anchorTile(zoneX * StrokeMesher.ZONE_TILES - baseX, index % StrokeMesher.ZONE_TILES, sizeX, far);
+			int tileY = anchorTile(zoneY * StrokeMesher.ZONE_TILES - baseY, index / StrokeMesher.ZONE_TILES % StrokeMesher.ZONE_TILES, sizeY, far);
 			int anchorX = tileX * StrokeMesher.TILE + StrokeMesher.TILE / 2;
 			int anchorY = tileY * StrokeMesher.TILE + StrokeMesher.TILE / 2;
+			int radius = far ? FAR_RADIUS : RADIUS;
 			double sum = 0;
 			for (int i = 0; i < vertices; i++)
 			{
@@ -714,7 +864,7 @@ class SceneStrokes
 			int anchorZ = (int) Math.round(sum / vertices);
 			for (int i = 0; i < vertices; i++)
 			{
-				if (Math.abs(vx[i] - anchorX) >= RADIUS || Math.abs(vy[i] - anchorY) >= RADIUS || Math.abs(vz[i] - anchorZ) >= RADIUS)
+				if (Math.abs(vx[i] - anchorX) >= radius || Math.abs(vy[i] - anchorY) >= radius || Math.abs(vz[i] - anchorZ) >= radius)
 				{
 					// Out of the bounds of the model. This does not happen in a zone that shows, but a bad height could do it.
 					log.debug("Stroke geometry of zone {},{} is out of the model bounds", zoneX, zoneY);
@@ -723,7 +873,7 @@ class SceneStrokes
 					return true;
 				}
 			}
-			Carrier carrier = obtain(vertices, faces);
+			Carrier carrier = obtain(vertices, faces, far);
 			if (carrier == null)
 			{
 				vertices = 0;
@@ -753,7 +903,7 @@ class SceneStrokes
 				i1[f] = fa[f];
 				i2[f] = fb[f];
 				i3[f] = fc[f];
-				FlatModel.paint(m, f, fColor[f], fAlpha[f]);
+				FlatModel.paint(m, f, fColorA[f], fColorB[f], fColorC[f], fAlpha[f]);
 			}
 			for (int f = faces; f < carrier.usedFaces; f++)
 			{
@@ -826,6 +976,28 @@ class SceneStrokes
 		}
 	}
 
+	/**
+	 * Returns the scene tile on one axis for a model of a zone. The zone starts at scene tile start, and offset is the
+	 * tile of the model in the zone. A zone past the scene edge stands on the edge tile. A far zone stands one tile
+	 * further in for each zone that it is further out, so far zones in one row do not share a tile.
+	 */
+	static int anchorTile(int start, int offset, int size, boolean far)
+	{
+		int tile = start + offset;
+		if (tile >= 0 && tile < size)
+		{
+			return tile;
+		}
+		if (!far)
+		{
+			return Math.max(0, Math.min(size - 1, tile));
+		}
+		// 1 for the first zone past the edge.
+		int out = start < 0 ? -Math.floorDiv(start, StrokeMesher.ZONE_TILES) : (start - size) / StrokeMesher.ZONE_TILES + 1;
+		int in = Math.min(size - 1, out - 1);
+		return start < 0 ? in : size - 1 - in;
+	}
+
 	private static long mix(long hash, long value)
 	{
 		hash ^= value + 0x9E3779B97F4A7C15L + (hash << 6) + (hash >>> 2);
@@ -846,6 +1018,7 @@ class SceneStrokes
 		private int size;
 		private double width;
 		private LineStyle style;
+		private boolean rainbow;
 		private int generation = -1;
 		private int changedFrame;
 
@@ -855,6 +1028,9 @@ class SceneStrokes
 		// One mesh of all points, for a transparent stroke: the parts overlap where they join and where the stroke
 		// crosses itself, so a transparent stroke made of parts gets darker there.
 		private StrokeMesher.Mesh whole;
+		// The meshes for the last width or style. They show until the new meshes are complete, so a new width (a zoom
+		// with Scale width with zoom off) or style does not move strokes over the game for some frames.
+		private List<StrokeMesher.Mesh> stale;
 		private Future<StrokeMesher.Mesh> pending;
 		double minX, minY, maxX, maxY;
 		// The color layers (FlatModel.layers) and what they are for, so they are not found again on each frame.
@@ -878,14 +1054,25 @@ class SceneStrokes
 		}
 
 		/** Makes the meshes that the stroke needs, until the deadline. Returns true if the stroke has meshes for all points. */
-		boolean update(Stroke s, double width, LineStyle style, long deadline)
+		boolean update(Stroke s, double width, LineStyle style, boolean rainbow, long deadline)
 		{
-			if (s.pts != pts || width != this.width || style != this.style || generation != SceneStrokes.this.generation
-				|| s.pts.size() < size)
+			if (s.pts != pts || width != this.width || style != this.style || rainbow != this.rainbow
+				|| generation != SceneStrokes.this.generation || s.pts.size() < size)
 			{
+				// Only the width or the style changed, so the old meshes are still in the right place.
+				boolean keep = s.pts == pts && s.pts.size() == size && generation == SceneStrokes.this.generation;
+				if (!keep)
+				{
+					stale = null;
+				}
+				else if (complete)
+				{
+					stale = new ArrayList<>(meshes());
+				}
 				pts = s.pts;
 				this.width = width;
 				this.style = style;
+				this.rainbow = rainbow;
 				generation = SceneStrokes.this.generation;
 				size = 0;
 				chunks.clear();
@@ -918,16 +1105,18 @@ class SceneStrokes
 					}
 					if (System.nanoTime() > deadline)
 					{
-						return false;
+						return stale != null;
 					}
-					StrokeMesher.Mesh mesh = StrokeMesher.build(pts, from, Math.min(from + CHUNK_POINTS, n - 1), width, style, ground);
+					StrokeMesher.Mesh mesh = StrokeMesher.build(pts, from, Math.min(from + CHUNK_POINTS, n - 1), width, style, ground, rainbow);
 					if (mesh == null)
 					{
+						stale = null;
 						return false;
 					}
 					chunks.add(mesh);
 				}
 				complete = true;
+				stale = null;
 				box(chunks);
 				version++;
 			}
@@ -983,7 +1172,7 @@ class SceneStrokes
 
 		List<StrokeMesher.Mesh> meshes()
 		{
-			return whole != null ? Collections.singletonList(whole) : chunks;
+			return whole != null ? Collections.singletonList(whole) : !complete && stale != null ? stale : chunks;
 		}
 
 		/**
@@ -993,20 +1182,21 @@ class SceneStrokes
 		 */
 		void wantWhole()
 		{
-			if (whole != null || pending != null || chunks.size() <= 1 || frame - changedFrame < STABLE_FRAMES || worker == null)
+			if (!complete || whole != null || pending != null || chunks.size() <= 1 || frame - changedFrame < STABLE_FRAMES || worker == null)
 			{
 				return;
 			}
 			List<StrokePoint> points = new ArrayList<>(pts.subList(0, size));
 			double w = width;
 			LineStyle st = style;
+			boolean r = rainbow;
 			StrokeMesher.Ground heights = new GroundCopy(ground,
 				(int) Math.floor(minX / StrokeMesher.TILE) - 1, (int) Math.floor(minY / StrokeMesher.TILE) - 1,
 				(int) Math.floor(maxX / StrokeMesher.TILE) + 1, (int) Math.floor(maxY / StrokeMesher.TILE) + 1);
 			ExecutorService executor = worker;
 			if (executor != null)
 			{
-				pending = executor.submit(() -> StrokeMesher.build(points, 0, points.size() - 1, w, st, heights));
+				pending = executor.submit(() -> StrokeMesher.build(points, 0, points.size() - 1, w, st, heights, r));
 			}
 		}
 

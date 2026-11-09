@@ -496,7 +496,8 @@ public class PartyCanvasSync
 
 	static SyncedStroke toSynced(Stroke stroke, List<StrokePoint> points)
 	{
-		return new SyncedStroke(stroke.id, stroke.color.getRGB(), stroke.strokeWidth, stroke.order, stroke.plane, new ArrayList<>(points));
+		return new SyncedStroke(stroke.id, stroke.color.getRGB(), stroke.strokeWidth, stroke.order, stroke.plane, new ArrayList<>(points),
+			stroke.rainbow ? Boolean.TRUE : null);
 	}
 
 	/** Returns a local stroke with the id, draw order and points of the synced stroke. A stroke without an id gets a new id. */
@@ -511,6 +512,7 @@ public class PartyCanvasSync
 		stroke.strokeWidth = synced.getStrokeWidth();
 		stroke.order = synced.getOrder();
 		stroke.plane = synced.getPlane();
+		stroke.rainbow = synced.isRainbow();
 		stroke.pts.addAll(synced.getPoints());
 		return stroke;
 	}
@@ -744,6 +746,7 @@ public class PartyCanvasSync
 			stroke.strokeWidth = Stroke.validWidth(synced.getStrokeWidth());
 			stroke.order = clock.receive(synced.getOrder());
 			stroke.plane = synced.getPlane();
+			stroke.rainbow = synced.isRainbow();
 			addPoints(stroke, synced.getPoints());
 
 			// Keep the newest MAX_SYNCED_STROKES strokes in draw order, the same strokes as the member's full sync.
@@ -818,6 +821,17 @@ public class PartyCanvasSync
 		@SerializedName("p")
 		@JsonAdapter(StrokeCodec.PointsAdapter.class)
 		List<StrokePoint> points;
+		/**
+		 * True for a rainbow stroke, null for a stroke with one color, so the JSON of most strokes does not get longer.
+		 * Old versions of the plugin do not read it and draw the stroke in its color, Rainbow.FIRST.
+		 */
+		@SerializedName("r")
+		Boolean rainbow;
+
+		boolean isRainbow()
+		{
+			return Boolean.TRUE.equals(rainbow);
+		}
 	}
 
 	// Party messages. The party server finds the class by its simple name, so the names start with RsPaint.

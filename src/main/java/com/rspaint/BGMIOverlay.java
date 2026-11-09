@@ -151,7 +151,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			return;
 		}
 		currentStroke = new Stroke();
-		currentStroke.color = selectedColor();
+		currentStroke.rainbow = isRainbowSlot(selectedColor);
+		currentStroke.color = currentStroke.rainbow ? Rainbow.FIRST : selectedColor();
 		currentStroke.strokeWidth = strokeSize;
 		currentStroke.order = clock.next();
 		currentStroke.plane = plane;
@@ -412,6 +413,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	// The stored width of new strokes. See screenWidth for the width on the screen.
 	int strokeSize = Stroke.MIN_WIDTH;
 	List<Color> colors = new ArrayList<>();
+	// True for the color slots that draw rainbows. A rainbow slot has Rainbow.FIRST in colors, so the Draw option shows it.
+	boolean[] rainbowSlots = new boolean[0];
 	int selectedColor = 0;
 
 	// If "Scale width with zoom" is on, a stroke has its stored width in screen pixels at this camera scale.
@@ -504,6 +507,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return color != null ? color : DEFAULT_COLOR;
 	}
 
+	/** Returns true if the slot draws rainbows. */
+	private boolean isRainbowSlot(int index)
+	{
+		return index < rainbowSlots.length && rainbowSlots[index] && colors.get(index) != null;
+	}
+
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
@@ -591,7 +600,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 					graphics.setColor(Color.PINK);
 					graphics.draw(new Ellipse2D.Float(mx - 10, my - 10, 20, 20));
 				} else if ((dDown || drawing) && ground != null) {
-					graphics.setColor(selectedColor());
+					graphics.setColor(brushColor());
 					float size = screenWidth(strokeSize);
 					if (size <= 2) {
 						graphics.drawRect((int) ground.x - 1, (int) ground.y - 1, 2, 2);
@@ -627,6 +636,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				super.draw(g, r, mouseOver);
 			}
 			@Override public void addMenuEntries() {
+				// The last entry is on top, so "New color" stays the left-click option.
+				client.getMenu().createMenuEntry(-1).setOption("New rainbow").onClick(me -> addSlotAtStart(Rainbow.FIRST, true));
 				client.getMenu().createMenuEntry(-1).setOption("New color").onClick(me -> pickColor(-1));
 			}
 		});
@@ -710,7 +721,13 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		@Override public void draw(Graphics2D g, Rectangle r, boolean mouseOver) {
 			Color color = colorIndex < colors.size() ? colors.get(colorIndex) : null;
 			if (colorIndex == selectedColor) r.grow(2, 2);
-			if (color != null) {
+			if (isRainbowSlot(colorIndex)) {
+				// One loop of the rainbow, from left to right.
+				for (int x = 0; x < r.width; x++) {
+					g.setColor(Rainbow.color(x * Rainbow.STEPS / r.width));
+					g.fillRect(r.x + x, r.y, 1, r.height);
+				}
+			} else if (color != null) {
 				g.setColor(color);
 				g.fill(r);
 			}
@@ -721,9 +738,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		@Override public void addMenuEntries() {
 			Color color = colors.get(colorIndex);
 			if (color != null) {
-				client.getMenu().createMenuEntry(1).setOption(ColorUtil.wrapWithColorTag("Select color", color)).onClick(me -> selectedColor = colorIndex);
+				String option = isRainbowSlot(colorIndex) ? "Select rainbow" : "Select color";
+				client.getMenu().createMenuEntry(1).setOption(ColorUtil.wrapWithColorTag(option, color)).onClick(me -> selectedColor = colorIndex);
 			}
 			client.getMenu().createMenuEntry(1).setOption("Choose ").setTarget("new color").onClick(me -> pickColor(colorIndex));
+			// Index 1 puts the entry under the ones before it.
+			client.getMenu().createMenuEntry(1).setOption("Choose ").setTarget("rainbow").onClick(me -> setSlot(colorIndex, Rainbow.FIRST, true));
 		}
 
 		@Override public void onDrag(ToolbarButton b) {
@@ -733,6 +753,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				Color other = colors.get(otherIndex);
 				colors.set(colorIndex, other);
 				colors.set(otherIndex, mine);
+				boolean myRainbow = rainbowSlots[colorIndex];
+				rainbowSlots[colorIndex] = rainbowSlots[otherIndex];
+				rainbowSlots[otherIndex] = myRainbow;
 				saveColors();
 			}
 		}
@@ -748,22 +771,52 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				color != null ? color : Color.WHITE, "Paint color", false);
 			colorPicker.setOnClose(c -> {
 				if (index == -1) {
-					for (int i = colors.size() - 1; i > 0; i--) {
-						colors.set(i, colors.get(i - 1));
-					}
-					// The colors moved, so the old selected slot now has a different color. Select the new color.
-					selectedColor = 0;
+					addSlotAtStart(c, false);
+					return;
 				}
-				colors.set(index == -1 ? 0 : index, c);
-				saveColors();
+				// A color replaces the rainbow of the slot.
+				setSlot(index, c, false);
 			});
 			colorPicker.setVisible(true);
 		});
 	}
 
+	/** Puts the color or a rainbow in the slot. */
+	private void setSlot(int index, Color color, boolean rainbow) {
+		colors.set(index, color);
+		rainbowSlots[index] = rainbow;
+		saveColors();
+	}
+
+	/** Puts the color or a rainbow in slot 0, moves the other slots down one slot, and selects slot 0. */
+	private void addSlotAtStart(Color color, boolean rainbow) {
+		for (int i = colors.size() - 1; i > 0; i--) {
+			colors.set(i, colors.get(i - 1));
+			rainbowSlots[i] = rainbowSlots[i - 1];
+		}
+		colors.set(0, color);
+		rainbowSlots[0] = rainbow;
+		// The slots moved, so the old selected slot now has a different color. Select the new one.
+		selectedColor = 0;
+		saveColors();
+	}
+
 	private void saveColors()
 	{
 		configManager.setConfiguration(RsPaintConfig.GROUP, "drawColors", gson.toJson(colors));
+		// The rainbow slots have their own key, so an older version of the plugin still reads the colors.
+		configManager.setConfiguration(RsPaintConfig.GROUP, "rainbowSlots", gson.toJson(rainbowSlots));
+	}
+
+	/** Returns the color of the brush: the color of the line end of a rainbow stroke in progress, or the selected color. */
+	private Color brushColor()
+	{
+		if (currentStroke != null && currentStroke.rainbow && !currentStroke.pts.isEmpty())
+		{
+			float[] distances = currentStroke.distances();
+			return Rainbow.colorAt(distances[currentStroke.pts.size() - 1]);
+		}
+		return selectedColor();
 	}
 
 	@Subscribe public void onClientTick(ClientTick e) {
@@ -1030,6 +1083,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			stroke.strokeWidth = synced.getStrokeWidth();
 			stroke.order = clock.next();
 			stroke.plane = synced.getPlane();
+			stroke.rainbow = synced.isRainbow();
 			stroke.pts.addAll(StrokeCodec.simplify(synced.getPoints()));
 			regionStrokes(stroke.primaryRegion()).add(stroke);
 			changedRegions.add(stroke.primaryRegion());
@@ -1233,8 +1287,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		try
 		{
 			float opacity = Math.max(0f, Math.min(1f, config.strokeOpacity() / 100f));
-			sceneStrokes.update(worldView, worldStrokes, currentStroke,
-				SceneStrokes.worldWidth(1, config.scaleWidthWithZoom(), client.getScale()),
+			sceneStrokes.update(worldView, worldStrokes, currentStroke, config.scaleWidthWithZoom(), client.getScale(),
 				config.lineStyle(), config.transparentStrokes(), opacity, Math.max(0, config.renderDistance()));
 		}
 		finally
@@ -1342,17 +1395,23 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	// The screen positions of a run: points in a row that are all on the screen.
 	private float[] runX = new float[64];
 	private float[] runY = new float[64];
+	// How far along the line each point of the run is, in world units. Only for a rainbow stroke.
+	private float[] runD = new float[64];
 	private int runLength = 0;
+	// While a rainbow stroke draws, the graphics to draw it on. endRun then draws each run with its colors, not into path.
+	private Graphics2D rainbowTo = null;
 
-	private void addToRun(float x, float y)
+	private void addToRun(float x, float y, float distance)
 	{
 		if (runLength == runX.length)
 		{
 			runX = Arrays.copyOf(runX, runLength * 2);
 			runY = Arrays.copyOf(runY, runLength * 2);
+			runD = Arrays.copyOf(runD, runLength * 2);
 		}
 		runX[runLength] = x;
 		runY[runLength] = y;
+		runD[runLength] = distance;
 		runLength++;
 	}
 
@@ -1363,6 +1422,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		runLength = 0;
 		if (n == 0)
 		{
+			return;
+		}
+
+		if (rainbowTo != null)
+		{
+			drawRainbowRun(style, n);
 			return;
 		}
 
@@ -1409,10 +1474,130 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	/** Draws the stroke. If skipCovered is true, the points on tiles that the renderer draws in the world do not draw. */
 	private void drawStroke(Graphics2D graphics, WorldView worldView, Stroke s, LineStyle style, boolean skipCovered)
 	{
+		graphics.setStroke(basicStroke(screenWidth(s.strokeWidth)));
+		if (s.rainbow)
+		{
+			// Each run draws in endRun, with the colors along the line.
+			rainbowTo = graphics;
+			try
+			{
+				buildPath(worldView, s, null, style, skipCovered);
+			}
+			finally
+			{
+				rainbowTo = null;
+			}
+			return;
+		}
 		buildPath(worldView, s, null, style, skipCovered);
 		graphics.setColor(transparentStrokes ? s.color : s.opaqueColor());
-		graphics.setStroke(basicStroke(screenWidth(s.strokeWidth)));
 		graphics.draw(path);
+	}
+
+	// A rainbow line on the screen is cut into straight pieces of at most this many pixels, so curves stay round.
+	private static final float RAINBOW_PIECE_PX = 3;
+	// The rainbow step of the line that is in rainbowPath, or -1 if it is empty. The path draws when the step changes.
+	private int rainbowStep = -1;
+	private final Path2D.Float rainbowPath = new Path2D.Float();
+	private float rainbowLastX, rainbowLastY;
+
+	/**
+	 * Draws the run in rainbowTo with the colors along the line. The curves are the curves of endRun. Each curve between
+	 * two points has the distances of its ends, and the color changes along it.
+	 */
+	private void drawRainbowRun(LineStyle style, int n)
+	{
+		float[] x = runX;
+		float[] y = runY;
+		float[] d = runD;
+		rainbowStep = -1;
+		if (n == 1)
+		{
+			// A very short line with round caps draws a dot with the width of the stroke.
+			rainbowLine(x[0], y[0], x[0] + 0.01f, y[0], d[0], d[0]);
+		}
+		else if (n == 2 || style == LineStyle.STRAIGHT)
+		{
+			for (int i = 0; i < n - 1; i++)
+			{
+				rainbowLine(x[i], y[i], x[i + 1], y[i + 1], d[i], d[i + 1]);
+			}
+		}
+		else if (style == LineStyle.SMOOTH)
+		{
+			// A curve from the middle of a segment to the middle of the next has the distances of those middles.
+			rainbowLine(x[0], y[0], (x[0] + x[1]) / 2, (y[0] + y[1]) / 2, d[0], (d[0] + d[1]) / 2);
+			for (int i = 1; i < n - 1; i++)
+			{
+				float x0 = (x[i - 1] + x[i]) / 2, y0 = (y[i - 1] + y[i]) / 2;
+				float x1 = (x[i] + x[i + 1]) / 2, y1 = (y[i] + y[i + 1]) / 2;
+				// The quadratic curve as a cubic curve.
+				rainbowCurve(x0, y0, x0 + (x[i] - x0) * 2 / 3, y0 + (y[i] - y0) * 2 / 3,
+					x1 + (x[i] - x1) * 2 / 3, y1 + (y[i] - y1) * 2 / 3, x1, y1,
+					(d[i - 1] + d[i]) / 2, (d[i] + d[i + 1]) / 2);
+			}
+			rainbowLine((x[n - 2] + x[n - 1]) / 2, (y[n - 2] + y[n - 1]) / 2, x[n - 1], y[n - 1], (d[n - 2] + d[n - 1]) / 2, d[n - 1]);
+		}
+		else
+		{
+			for (int i = 0; i < n - 1; i++)
+			{
+				int prev = Math.max(i - 1, 0);
+				int next = Math.min(i + 2, n - 1);
+				rainbowCurve(x[i], y[i],
+					x[i] + (x[i + 1] - x[prev]) / 6, y[i] + (y[i + 1] - y[prev]) / 6,
+					x[i + 1] - (x[next] - x[i]) / 6, y[i + 1] - (y[next] - y[i]) / 6,
+					x[i + 1], y[i + 1], d[i], d[i + 1]);
+			}
+		}
+		flushRainbow();
+	}
+
+	private void rainbowLine(float x0, float y0, float x1, float y1, float d0, float d1)
+	{
+		rainbowCurve(x0, y0, x0 + (x1 - x0) / 3, y0 + (y1 - y0) / 3, x1 - (x1 - x0) / 3, y1 - (y1 - y0) / 3, x1, y1, d0, d1);
+	}
+
+	/** Adds the cubic curve to the rainbow line, in short pieces. Each piece has the color of the distance at its middle. */
+	private void rainbowCurve(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3, float d0, float d1)
+	{
+		// The control polygon is at least as long as the curve.
+		double length = Math.hypot(x1 - x0, y1 - y0) + Math.hypot(x2 - x1, y2 - y1) + Math.hypot(x3 - x2, y3 - y2);
+		double steps = Math.abs(d1 - d0) / Rainbow.LOOP * Rainbow.STEPS;
+		int pieces = (int) Math.min(1024, Math.max(1, Math.ceil(Math.max(length / RAINBOW_PIECE_PX, steps))));
+		if (rainbowStep == -1)
+		{
+			rainbowLastX = x0;
+			rainbowLastY = y0;
+		}
+		for (int j = 1; j <= pieces; j++)
+		{
+			float t = (float) j / pieces, u = 1 - t;
+			float px = u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3;
+			float py = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3;
+			int step = Rainbow.step(d0 + (d1 - d0) * (j - 0.5) / pieces);
+			if (step != rainbowStep)
+			{
+				// A new color: draw the line so far, and go on from its end.
+				flushRainbow();
+				rainbowStep = step;
+				rainbowPath.moveTo(rainbowLastX, rainbowLastY);
+			}
+			rainbowPath.lineTo(px, py);
+			rainbowLastX = px;
+			rainbowLastY = py;
+		}
+	}
+
+	private void flushRainbow()
+	{
+		if (rainbowStep != -1)
+		{
+			rainbowTo.setColor(Rainbow.color(rainbowStep));
+			rainbowTo.draw(rainbowPath);
+		}
+		rainbowPath.reset();
+		rainbowStep = -1;
 	}
 
 	/**
@@ -1428,13 +1613,16 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		// Consecutive points are often on the same tile, so project each tile once.
 		int tileX = Integer.MIN_VALUE, tileY = Integer.MIN_VALUE;
 		Polygon poly = null;
-		for (StrokePoint p : s.pts)
+		float[] distances = rainbowTo != null ? s.distances() : null;
+		List<StrokePoint> pts = s.pts;
+		for (int i = 0; i < pts.size(); i++)
 		{
+			StrokePoint p = pts.get(i);
 			if (p.getX() != tileX || p.getY() != tileY)
 			{
 				tileX = p.getX();
 				tileY = p.getY();
-				LocalPoint lp = isInRenderDistance(worldView, tileX, tileY) && !(skipCovered && sceneStrokes.coversTile(tileX, tileY))
+				LocalPoint lp = isInRenderDistance(worldView, tileX, tileY) && !(skipCovered && sceneStrokes.coversTile(s, tileX, tileY))
 					? loadedLocalPoint(worldView, tileX, tileY, s.plane) : null;
 				poly = lp != null ? Perspective.getCanvasTilePoly(client, lp) : null;
 			}
@@ -1456,7 +1644,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				float fromY = runLength > 0 ? runY[runLength - 1] : screen.y;
 				hit = Line2D.ptSegDist(fromX, fromY, screen.x, screen.y, eraseAt.x, eraseAt.y) < 10 + screenWidth(s.strokeWidth) / 2;
 			}
-			addToRun(screen.x, screen.y);
+			addToRun(screen.x, screen.y, distances != null ? distances[i] : 0);
 		}
 		endRun(style);
 		return hit;
@@ -1680,6 +1868,22 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			saved.add(null);
 		}
 		colors = saved;
+		rainbowSlots = loadRainbowSlots(colors.size());
+	}
+
+	/** Returns which slots draw rainbows, as saved. */
+	private boolean[] loadRainbowSlots(int slots) {
+		boolean[] loaded = new boolean[slots];
+		String configuration = configManager.getConfiguration(RsPaintConfig.GROUP, "rainbowSlots");
+		try {
+			boolean[] saved = configuration != null ? gson.fromJson(configuration, boolean[].class) : null;
+			if (saved != null) {
+				System.arraycopy(saved, 0, loaded, 0, Math.min(slots, saved.length));
+			}
+		} catch (RuntimeException e) {
+			log.warn("Cannot read the saved rainbow slots", e);
+		}
+		return loaded;
 	}
 
 	/** Frees the loaded strokes and the history while the plugin is off. */
@@ -1720,6 +1924,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		while (colors.size() < COLOR_SLOTS) {
 			colors.add(null);
 		}
+		rainbowSlots = new boolean[colors.size()];
 		saveColors();
 	}
 

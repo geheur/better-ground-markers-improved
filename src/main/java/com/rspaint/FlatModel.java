@@ -213,11 +213,21 @@ final class FlatModel
 
 	static void paint(Model m, int face, int hsl, int alpha)
 	{
-		m.getFaceColors1()[face] = hsl;
-		m.getFaceColors2()[face] = hsl;
+		paint(m, face, hsl, hsl, hsl, alpha);
+	}
+
+	/**
+	 * Gives each corner of the face its own color. The renderers blend the corner colors over the face, so a face can go
+	 * from one color to the next. The unlit color is the color of the first corner.
+	 */
+	static void paint(Model m, int face, int hsl1, int hsl2, int hsl3, int alpha)
+	{
+		m.getFaceColors1()[face] = hsl1;
+		m.getFaceColors2()[face] = hsl2;
 		// Three equal corner colors draw the face in one color, and -2 hides it. Not -1 ("flat"): for flat faces
 		// 117 HD does not use the vertex normals and takes the normal of the triangle, which turns with the camera.
-		m.getFaceColors3()[face] = alpha == 0 ? -2 : hsl;
+		m.getFaceColors3()[face] = alpha == 0 ? -2 : hsl3;
+		int hsl = hsl1;
 		byte[] transparencies = m.getFaceTransparencies();
 		if (transparencies != null)
 		{

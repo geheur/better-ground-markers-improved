@@ -136,6 +136,12 @@ public class RsPaintPlugin extends Plugin
 		// The plane (floor) that the stroke was drawn on. The stroke shows only while the player is on this plane.
 		// Strokes saved before the plane existed load on plane 0.
 		int plane;
+		// True if the color goes through the hues along the line (Rainbow). The color is then Rainbow.FIRST.
+		boolean rainbow;
+		// How far along the line each point is (Rainbow.distances), for the first distancesKnown points of distancesFor.
+		private transient float[] distances;
+		private transient List<StrokePoint> distancesFor;
+		private transient int distancesKnown;
 		// The color without its opacity. Made when first needed, so drawing does not make a new Color on each frame.
 		// Transient, so it is not saved with the stroke.
 		private transient Color opaqueColor;
@@ -148,6 +154,26 @@ public class RsPaintPlugin extends Plugin
 				opaqueColor = color.getAlpha() == 255 ? color : new Color(color.getRGB(), false);
 			}
 			return opaqueColor;
+		}
+
+		/**
+		 * Returns how far along the line each point is, in world units. Only new points are measured, so a stroke that
+		 * the player draws is not measured again on each frame. Client thread only.
+		 */
+		float[] distances()
+		{
+			if (distancesFor != pts || distancesKnown > pts.size())
+			{
+				// Simplify made a new list.
+				distancesFor = pts;
+				distancesKnown = 0;
+			}
+			if (distancesKnown < pts.size() || distances == null)
+			{
+				distances = Rainbow.distances(pts, distances, distancesKnown);
+				distancesKnown = pts.size();
+			}
+			return distances;
 		}
 
 		public int primaryRegion()

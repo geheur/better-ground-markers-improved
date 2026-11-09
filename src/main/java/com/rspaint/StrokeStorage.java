@@ -29,7 +29,8 @@ class StrokeStorage
 	 * Version 1: the format of the original plugin. A plain JSON array of Stroke objects. Each point is a JSON object
 	 * with x, y, subx and suby, and the color is a Color object. The strokes have no id, draw order or plane.
 	 * Version 2: {"version":2,"strokes":[...]}. Each stroke is a SyncedStroke: an id, an ARGB color, a width,
-	 * a draw order, a plane, and the points as one StrokeCodec string.
+	 * a draw order, a plane, and the points as one StrokeCodec string. A rainbow stroke also has "r":true. Versions
+	 * without rainbows skip that field, so it needs no new format version.
 	 */
 	static final int FORMAT_VERSION = 2;
 
@@ -197,7 +198,8 @@ class StrokeStorage
 		}
 
 		double width = Stroke.validWidth(stroke.getStrokeWidth());
-		return new SyncedStroke(stroke.getId(), stroke.getColor(), width, stroke.getOrder(), stroke.getPlane(), points);
+		return new SyncedStroke(stroke.getId(), stroke.getColor(), width, stroke.getOrder(), stroke.getPlane(), points,
+			stroke.isRainbow() ? Boolean.TRUE : null);
 	}
 
 	private static float clamp01(float value)

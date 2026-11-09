@@ -111,13 +111,26 @@ class CarrierModels
 	}
 
 	/**
+	 * Returns true if create can make opaque models, which have no transparency array. The seed must not have one,
+	 * because a merged model has the array if one of its parts has it.
+	 */
+	boolean canMakeOpaque()
+	{
+		return seeded() && seed.getFaceTransparencies() == null;
+	}
+
+	/**
 	 * Returns a model with at least this many vertices and faces, all faces hidden, and bounds fixed to the radius
 	 * around its origin. Returns null if the model cannot be made now.
 	 *
 	 * <p>The client finds the bounds of a model only once, so they are fixed here with temporary vertices at the
 	 * radius. The geometry that is written later must stay in the radius, because the GPU plugin sorts faces in the bounds.
+	 *
+	 * <p>A transparent model has a transparency array, so its faces can have alpha. The GPU plugin sorts its faces and
+	 * does not draw it if it is 6000 units or more across. An opaque model has no transparency array (see
+	 * canMakeOpaque). The GPU plugin draws it with the depth buffer, at any size.
 	 */
-	Model create(int vertices, int faces, int radius)
+	Model create(int vertices, int faces, int radius, boolean transparent)
 	{
 		if (!seeded())
 		{
@@ -132,7 +145,10 @@ class CarrierModels
 		}
 		ModelData data = client.mergeModels(parts).cloneVertices().cloneColors();
 		// The GPU plugin draws a model with a transparency array in its sorted pass for transparent faces.
-		data = data.cloneTransparencies(true);
+		if (transparent)
+		{
+			data = data.cloneTransparencies(true);
+		}
 		if (data.getFaceTextures() != null)
 		{
 			data = data.cloneTextures();
@@ -149,7 +165,7 @@ class CarrierModels
 		}
 		Model model = data.light();
 		if (model == null || model.getVerticesCount() < vertices || model.getFaceCount() < faces
-			|| model.getFaceTransparencies() == null)
+			|| (model.getFaceTransparencies() != null) != transparent)
 		{
 			return null;
 		}

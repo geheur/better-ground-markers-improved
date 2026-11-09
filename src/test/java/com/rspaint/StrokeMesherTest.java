@@ -277,6 +277,59 @@ public class StrokeMesherTest
 			long ms = (System.nanoTime() - start) / 1_000_000;
 			int faces = mesh.pieces.stream().mapToInt(p -> p.faces).sum();
 			System.out.println(style + ": " + ms + " ms, " + faces + " faces, " + mesh.pieces.size() + " zones");
+			start = System.nanoTime();
+			StrokeMesher.Mesh rainbow = StrokeMesher.build(pts, 0, pts.size() - 1, 25, style, SLOPE, true);
+			System.out.println(style + " rainbow: " + (System.nanoTime() - start) / 1_000_000 + " ms, "
+				+ rainbow.pieces.stream().mapToInt(p -> p.faces).sum() + " faces");
 		}
+	}
+
+	@Test
+	public void rainbowHasTheSameShapeAndDistancesAlongTheLine()
+	{
+		// From x = 3200.25 to x = 3203.75 tiles: 3.5 tiles long.
+		List<StrokePoint> pts = line(3200, 0.25f, 3203, 0.75f, 3200);
+		StrokeMesher.Mesh plain = build(pts, 20, LineStyle.STRAIGHT, SLOPE);
+		StrokeMesher.Mesh rainbow = StrokeMesher.build(pts, 0, 1, 20, LineStyle.STRAIGHT, SLOPE, true);
+		assertEquals(area(plain), area(rainbow), area(plain) * 0.001);
+		int plainVertices = 0, rainbowVertices = 0;
+		for (StrokeMesher.Piece p : plain.pieces)
+		{
+			assertNull(p.d);
+			plainVertices += p.vertices;
+		}
+		for (StrokeMesher.Piece p : rainbow.pieces)
+		{
+			rainbowVertices += p.vertices;
+			for (int i = 0; i < p.vertices; i++)
+			{
+				// The line starts 0.25 tiles into tile 3200, and the zone starts at tile 3200.
+				double expected = Math.max(0, Math.min(3.5 * 128, p.x[i] + (p.zoneX * 8 - 3200) * 128 - 0.25 * 128));
+				assertEquals(expected, p.d[i], 0.01);
+			}
+		}
+		// The small cells give the colors vertices close together.
+		assertTrue(rainbowVertices > plainVertices * 2);
+	}
+
+	@Test
+	public void rainbowPartsKeepTheDistancesOfTheWholeStroke()
+	{
+		List<StrokePoint> pts = new ArrayList<>();
+		for (int i = 0; i <= 8; i++)
+		{
+			pts.add(new StrokePoint(3200 + i, 3200, 0.5f, 0.5f));
+		}
+		// The part from point 4 starts 4 tiles along the line. Its round cap reaches half the width back.
+		StrokeMesher.Mesh part = StrokeMesher.build(pts, 4, 8, 10, LineStyle.STRAIGHT, FLAT, true);
+		float min = Float.MAX_VALUE;
+		for (StrokeMesher.Piece p : part.pieces)
+		{
+			for (int i = 0; i < p.vertices; i++)
+			{
+				min = Math.min(min, p.d[i]);
+			}
+		}
+		assertEquals(4 * 128 - 5, min, 0.01);
 	}
 }

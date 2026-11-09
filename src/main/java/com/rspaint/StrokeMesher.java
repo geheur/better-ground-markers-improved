@@ -31,6 +31,11 @@ final class StrokeMesher
 	static final int TILE = 128;
 	static final int ZONE_TILES = 8;
 	static final int ZONE = TILE * ZONE_TILES;
+	/**
+	 * The polygons of a rainbow stroke are cut into squares of this size, so they have vertices close together. Each vertex
+	 * has its own color, and the renderer blends the colors over each face, so the colors change smoothly.
+	 */
+	static final int RAINBOW_CELL = TILE / 4;
 
 	private StrokeMesher()
 	{
@@ -56,6 +61,8 @@ final class StrokeMesher
 		/** The world zone: the world tile divided by ZONE_TILES. */
 		final int zoneX, zoneY;
 		float[] x = new float[32], y = new float[32], z = new float[32];
+		/** For a rainbow stroke, how far along the line each vertex is (Rainbow.distances). Else null. */
+		float[] d;
 		int vertices;
 		/** The vertex count of each polygon. The vertices of the polygons follow each other. */
 		int[] sizes = new int[8];
@@ -69,7 +76,7 @@ final class StrokeMesher
 			this.zoneY = zoneY;
 		}
 
-		private void add(double[] px, double[] py, double[] pz, int n, double offsetX, double offsetY)
+		private void add(double[] px, double[] py, double[] pz, float[] pd, int n, double offsetX, double offsetY)
 		{
 			if (vertices + n > x.length)
 			{
@@ -77,12 +84,20 @@ final class StrokeMesher
 				x = Arrays.copyOf(x, size);
 				y = Arrays.copyOf(y, size);
 				z = Arrays.copyOf(z, size);
+				if (d != null)
+				{
+					d = Arrays.copyOf(d, size);
+				}
 			}
 			for (int i = 0; i < n; i++)
 			{
 				x[vertices + i] = (float) (px[i] + offsetX);
 				y[vertices + i] = (float) (py[i] + offsetY);
 				z[vertices + i] = (float) pz[i];
+				if (d != null)
+				{
+					d[vertices + i] = pd[i];
+				}
 			}
 			vertices += n;
 			if (polygons == sizes.length)
@@ -123,6 +138,15 @@ final class StrokeMesher
 	 */
 	static Mesh build(List<StrokePoint> pts, int from, int to, double width, LineStyle style, Ground ground)
 	{
+		return build(pts, from, to, width, style, ground, false);
+	}
+
+	/**
+	 * As the other build. For a rainbow stroke, the polygons are cut into RAINBOW_CELL squares, and each vertex gets how far
+	 * along the line it is (Piece.d): the distance of the nearest place on the line through the points.
+	 */
+	static Mesh build(List<StrokePoint> pts, int from, int to, double width, LineStyle style, Ground ground, boolean rainbow)
+	{
 		if (pts.isEmpty() || from < 0 || to >= pts.size() || from > to || !(width > 0))
 		{
 			return null;
@@ -133,7 +157,8 @@ final class StrokeMesher
 		Shape outline = outline(pts, from, to, width, style, originX, originY);
 		Area area = new Area(flatten(outline, flatness(width)));
 		Rectangle2D bounds = area.getBounds2D();
-		List<Piece> pieces = new Slabs(ground, originX, originY).cut(area);
+		Centerline line = rainbow ? new Centerline(pts, from, to, width, originX, originY) : null;
+		List<Piece> pieces = new Slabs(ground, originX, originY, rainbow ? RAINBOW_CELL : TILE, line).cut(area);
 		return new Mesh(pieces, originX + bounds.getMinX(), originY + bounds.getMinY(),
 			originX + bounds.getMaxX(), originY + bounds.getMaxY());
 	}
@@ -237,6 +262,95 @@ final class StrokeMesher
 		return flat;
 	}
 
+	/** The line through the points of a part of a stroke, for the distances along the line of a rainbow stroke. */
+	static final class Centerline
+	{
+		// The segments near each square of BUCKET units, so a vertex looks only at the segments near it.
+		private static final int BUCKET = TILE;
+
+		// The points from the one before the part to the one after it, in the coordinates of build, with their distances.
+		private final double[] x, y;
+		private final float[] d;
+		private final int count;
+		// For each square: the count of segments, then the segments.
+		private final Map<Long, int[]> buckets = new HashMap<>();
+
+		Centerline(List<StrokePoint> pts, int from, int to, double width, long originX, long originY)
+		{
+			int first = Math.max(0, from - 1);
+			int last = Math.min(pts.size() - 1, to + 1);
+			float[] all = Rainbow.distances(pts.subList(0, last + 1), null, 0);
+			count = last - first + 1;
+			x = new double[count];
+			y = new double[count];
+			d = new float[count];
+			for (int i = 0; i < count; i++)
+			{
+				StrokePoint p = pts.get(first + i);
+				x[i] = (long) p.getX() * TILE - originX + p.getSubx() * TILE;
+				y[i] = (long) p.getY() * TILE - originY + p.getSuby() * TILE;
+				d[i] = all[first + i];
+			}
+			// A vertex is at most half the width from the curve, and the curve can bend away from the straight segments.
+			double reach = width / 2 + TILE;
+			for (int i = 0; i + 1 < count; i++)
+			{
+				int minX = (int) Math.floor((Math.min(x[i], x[i + 1]) - reach) / BUCKET);
+				int maxX = (int) Math.floor((Math.max(x[i], x[i + 1]) + reach) / BUCKET);
+				int minY = (int) Math.floor((Math.min(y[i], y[i + 1]) - reach) / BUCKET);
+				int maxY = (int) Math.floor((Math.max(y[i], y[i + 1]) + reach) / BUCKET);
+				for (int bx = minX; bx <= maxX; bx++)
+				{
+					for (int by = minY; by <= maxY; by++)
+					{
+						long key = (long) bx << 32 | (by & 0xFFFFFFFFL);
+						int[] list = buckets.get(key);
+						if (list == null)
+						{
+							list = new int[5];
+						}
+						else if (list[0] + 1 == list.length)
+						{
+							list = Arrays.copyOf(list, list.length * 2);
+						}
+						list[++list[0]] = i;
+						buckets.put(key, list);
+					}
+				}
+			}
+		}
+
+		/** Returns how far along the line the place on the line nearest to the point is. */
+		float distanceAt(double px, double py)
+		{
+			if (count == 1)
+			{
+				return d[0];
+			}
+			long key = (long) (int) Math.floor(px / BUCKET) << 32 | ((int) Math.floor(py / BUCKET) & 0xFFFFFFFFL);
+			int[] list = buckets.get(key);
+			// Without a list, all segments.
+			int n = list != null ? list[0] : count - 1;
+			double best = Double.MAX_VALUE;
+			float result = d[0];
+			for (int k = 0; k < n; k++)
+			{
+				int i = list != null ? list[k + 1] : k;
+				double sx = x[i + 1] - x[i], sy = y[i + 1] - y[i];
+				double lengthSq = sx * sx + sy * sy;
+				double t = lengthSq > 0 ? Math.max(0, Math.min(1, ((px - x[i]) * sx + (py - y[i]) * sy) / lengthSq)) : 0;
+				double dx = x[i] + sx * t - px, dy = y[i] + sy * t - py;
+				double distanceSq = dx * dx + dy * dy;
+				if (distanceSq < best)
+				{
+					best = distanceSq;
+					result = (float) (d[i] + (d[i + 1] - d[i]) * t);
+				}
+			}
+			return result;
+		}
+	}
+
 	/**
 	 * Cuts an area into horizontal slabs, the slabs into tiles, and the tiles into their two ground triangles.
 	 * The area must not overlap itself, as an Area does not.
@@ -247,6 +361,10 @@ final class StrokeMesher
 
 		private final Ground ground;
 		private final long originX, originY;
+		// The size of the squares that the polygons are cut into: TILE, or RAINBOW_CELL for a rainbow stroke.
+		private final int cell;
+		// The line of a rainbow stroke, for the distance of each vertex. Else null.
+		private final Centerline line;
 		private final long originTileX, originTileY;
 		private final Map<Long, Piece> pieces = new HashMap<>();
 		private final List<Piece> order = new ArrayList<>();
@@ -259,12 +377,15 @@ final class StrokeMesher
 		private double[] ax = new double[16], ay = new double[16], bx = new double[16], by = new double[16];
 		// The polygon before the cut along the diagonal of a tile.
 		private double[] keepX = new double[16], keepY = new double[16];
-		private final double[] pz = new double[16];
+		private double[] pz = new double[16];
+		private float[] pd = new float[16];
 		private final int[] corners = new int[4], other = new int[4];
 
-		Slabs(Ground ground, long originX, long originY)
+		Slabs(Ground ground, long originX, long originY, int cell, Centerline line)
 		{
 			this.ground = ground;
+			this.cell = cell;
+			this.line = line;
 			this.originX = originX;
 			this.originY = originY;
 			originTileX = originX / TILE;
@@ -306,9 +427,9 @@ final class StrokeMesher
 			{
 				double y0 = ys[s];
 				double y1 = ys[s + 1];
-				if (y0 == Math.floor(y0 / TILE) * TILE)
+				if (y0 == Math.floor(y0 / cell) * cell)
 				{
-					// A tile row line: the trapezoids must not go into the next row.
+					// A row line: the trapezoids must not go into the next row.
 					closeAll();
 				}
 				// Edges end at slab lines, because all their end points are slab lines.
@@ -454,8 +575,8 @@ final class StrokeMesher
 			{
 				return new double[0];
 			}
-			// The slabs also stop at each tile row, so each slab is in one row of tiles.
-			for (double row = Math.ceil(minY / TILE) * TILE; row < maxY; row += TILE)
+			// The slabs also stop at each row of cells, so each slab is in one row of tiles.
+			for (double row = Math.ceil(minY / cell) * cell; row < maxY; row += cell)
 			{
 				if (yCount == ys.length)
 				{
@@ -504,15 +625,20 @@ final class StrokeMesher
 			}
 		}
 
-		/** Cuts the trapezoid with the corners (x00, y0), (x01, y0), (x11, y1), (x10, y1) into the tiles of its row. */
+		/**
+		 * Cuts the trapezoid with the corners (x00, y0), (x01, y0), (x11, y1), (x10, y1) into the cells of its row.
+		 * The trapezoid is in one row of cells, so it is in one row of tiles.
+		 */
 		private void trapezoid(double x00, double x01, double x11, double x10, double y0, double y1)
 		{
 			int row = (int) Math.floor((y0 + y1) / 2 / TILE);
-			int first = (int) Math.floor(Math.min(x00, x10) / TILE);
-			int last = (int) Math.floor(Math.max(x01, x11) / TILE);
+			int first = (int) Math.floor(Math.min(x00, x10) / cell);
+			int last = (int) Math.floor(Math.max(x01, x11) / cell);
 			for (int column = first; column <= last; column++)
 			{
-				int worldX = (int) (originTileX + column);
+				// The tile column of the cell column. With cells of one tile, they are the same.
+				int tileColumn = Math.floorDiv(column * cell, TILE);
+				int worldX = (int) (originTileX + tileColumn);
 				int worldY = (int) (originTileY + row);
 				if (!ground.corners(worldX, worldY, corners))
 				{
@@ -520,7 +646,8 @@ final class StrokeMesher
 				}
 				int sw = corners[0], se = corners[1], ne = corners[2], nw = corners[3];
 				int end = column;
-				if (sw == se && se == ne && ne == nw)
+				// Only whole tiles join. A rainbow stroke keeps its small cells.
+				if (cell == TILE && sw == se && se == ne && ne == nw)
 				{
 					// Flat tiles next to each other in the same zone take one polygon.
 					while (end < last && Math.floorMod(worldX + (end - column), ZONE_TILES) != ZONE_TILES - 1
@@ -530,11 +657,11 @@ final class StrokeMesher
 						end++;
 					}
 				}
-				// The part of the trapezoid in the tiles from column to end.
+				// The part of the trapezoid in the cells from column to end.
 				int n = quad(x00, x01, x11, x10, y0, y1);
-				n = clip(n, 1, 0, (end + 1) * TILE);
-				n = clip(n, -1, 0, -column * TILE);
-				double tileX = column * (double) TILE;
+				n = clip(n, 1, 0, (end + 1) * (double) cell);
+				n = clip(n, -1, 0, -column * (double) cell);
+				double tileX = tileColumn * (double) TILE;
 				double tileY = row * (double) TILE;
 				if (sw + ne == se + nw)
 				{
@@ -632,8 +759,17 @@ final class StrokeMesher
 			{
 				return;
 			}
+			if (pz.length < n)
+			{
+				pz = new double[n * 2];
+				pd = new float[n * 2];
+			}
 			for (int i = 0; i < n; i++)
 			{
+				if (line != null)
+				{
+					pd[i] = line.distanceAt(ax[i], ay[i]);
+				}
 				double u = (ax[i] - tileX) / TILE;
 				double v = (ay[i] - tileY) / TILE;
 				pz[i] = south
@@ -647,10 +783,14 @@ final class StrokeMesher
 			if (piece == null)
 			{
 				piece = new Piece(zoneX, zoneY);
+				if (line != null)
+				{
+					piece.d = new float[piece.x.length];
+				}
 				pieces.put(key, piece);
 				order.add(piece);
 			}
-			piece.add(ax, ay, pz, n, originX - (long) zoneX * ZONE, originY - (long) zoneY * ZONE);
+			piece.add(ax, ay, pz, pd, n, originX - (long) zoneX * ZONE, originY - (long) zoneY * ZONE);
 		}
 
 		private double signedArea(int n)

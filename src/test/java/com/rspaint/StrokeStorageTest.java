@@ -60,7 +60,7 @@ public class StrokeStorageTest
 	@Test
 	public void writesVersion2WithEncodedPoints()
 	{
-		SyncedStroke stroke = new SyncedStroke("abc", new Color(10, 20, 30, 128).getRGB(), 3, 42, 2, List.of(FIRST, LAST));
+		SyncedStroke stroke = new SyncedStroke("abc", new Color(10, 20, 30, 128).getRGB(), 3, 42, 2, List.of(FIRST, LAST), null);
 
 		String text = storage.write(List.of(stroke));
 		assertTrue(text, text.startsWith("{\"version\":2,"));
@@ -84,8 +84,8 @@ public class StrokeStorageTest
 	@Test
 	public void writesInDrawOrder()
 	{
-		SyncedStroke top = new SyncedStroke("b", 0, 1, 5, 0, List.of(FIRST));
-		SyncedStroke bottom = new SyncedStroke("a", 0, 1, 3, 0, List.of(FIRST));
+		SyncedStroke top = new SyncedStroke("b", 0, 1, 5, 0, List.of(FIRST), null);
+		SyncedStroke bottom = new SyncedStroke("a", 0, 1, 3, 0, List.of(FIRST), null);
 		assertEquals(List.of(bottom, top), read(storage.write(List.of(top, bottom))).getStrokes());
 	}
 
