@@ -769,7 +769,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			buttons.get(button).addMenuEntries();
 			return;
 		}
-		if ((dDown || eDown) && Arrays.stream(client.getMenu().getMenuEntries()).anyMatch(entry -> entry.getType() == MenuAction.WALK)) {
+		if ((dDown || eDown) && Arrays.stream(client.getMenu().getMenuEntries()).anyMatch(entry -> entry.getType() == MenuAction.WALK || entry.getType() == MenuAction.SET_HEADING)) {
 			client.getMenu().createMenuEntry(-1).setOption(dDown ? ColorUtil.wrapWithColorTag("Draw", selectedColor()) : "Erase").setType(MenuAction.CC_OP);
 			drawable = true;
 		} else {
@@ -1385,7 +1385,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	boolean drawing = false; // mouse is down and drawing.
 	boolean eDown = false; // erase keybind is held, or erase mode is on if toggleModes is on.
 	boolean erasing = false; // mouse is down and erasing.
-	boolean drawable = false; // last menu entries contained WALK.
+	boolean drawable = false; // last menu entries contained WALK, or SET_HEADING while the player steers a boat.
 
 	// The draw and erase keys are down. Key repeat sends more presses, so toggleModes toggles only on the first one.
 	private boolean drawKeyHeld = false;
