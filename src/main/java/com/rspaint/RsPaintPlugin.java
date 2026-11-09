@@ -2,6 +2,7 @@ package com.rspaint;
 
 import com.google.inject.Provides;
 import java.awt.Color;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -20,11 +21,13 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.util.Filepath;
 
 @PluginDescriptor(
 	name = "RsPaint",
 	description = "Draw on the ground.",
-	tags = {"paint", "draw", "ground", "marker", "tile", "color", "art"}
+	tags = {"paint", "draw", "ground", "marker", "tile", "color", "art"},
+	internalName = "rspaint"
 )
 public class RsPaintPlugin extends Plugin
 {
@@ -39,6 +42,12 @@ public class RsPaintPlugin extends Plugin
 	@Inject ClientToolbar clientToolbar;
 
 	private NavigationButton navigationButton;
+
+	/** Returns the data folder of the plugin, .runelite/plugin-data/rspaint. Do not call it on the client thread. */
+	Filepath dataDirectory() throws IOException
+	{
+		return getPluginDirectory();
+	}
 
 	@Override
 	protected void startUp() throws Exception

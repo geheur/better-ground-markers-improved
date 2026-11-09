@@ -79,6 +79,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	@Inject private PartyCanvasSync partySync;
 	@Inject private StrokeClock clock;
 	@Inject private StrokeStorage storage;
+	@Inject private StrokeBackups backups;
 
 	@Getter @Setter private volatile boolean showOwnStrokes = true;
 
@@ -900,8 +901,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 		if (loaded.getVersion() < StrokeStorage.FORMAT_VERSION)
 		{
-			// Save the strokes again in the current format, so the old format is read only once.
-			configManager.setConfiguration(RsPaintConfig.GROUP, key, storage.write(loaded.getStrokes()));
+			migrate(key, loaded, conf);
 		}
 		if (!strokes.isEmpty())
 		{
@@ -910,6 +910,38 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			partySync.onStrokesRestored(strokes);
 		}
 		return strokes;
+	}
+
+	// The old text of each config key that is being backed up now, so a region that loads again does not back up twice.
+	private final Map<String, String> backupsInProgress = new HashMap<>();
+
+	/**
+	 * Saves the old text to a backup file, then saves the strokes again in the current format, so the old format is
+	 * read only once. The file is written on a background thread. If the file cannot be written, the old text stays
+	 * saved until the player changes the strokes of the region, and the next load tries the backup again.
+	 */
+	private void migrate(String key, StrokeStorage.Loaded loaded, String oldText)
+	{
+		if (oldText.equals(backupsInProgress.get(key)))
+		{
+			return;
+		}
+		backupsInProgress.put(key, oldText);
+		String newText = storage.write(loaded.getStrokes());
+		backups.save(key, loaded.getVersion(), oldText).whenComplete((ignored, error) -> clientThread.invoke(() ->
+		{
+			backupsInProgress.remove(key, oldText);
+			if (error != null)
+			{
+				log.warn("Cannot save a backup of {}, so it stays in the old format", key, error);
+				return;
+			}
+			// A new save, or a profile change, can replace the old text first. Do not save over that text.
+			if (oldText.equals(configManager.getConfiguration(RsPaintConfig.GROUP, key)))
+			{
+				configManager.setConfiguration(RsPaintConfig.GROUP, key, newText);
+			}
+		}));
 	}
 
 	void saveStrokes(int regionId) {
