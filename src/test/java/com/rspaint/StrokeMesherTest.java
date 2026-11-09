@@ -282,7 +282,7 @@ public class StrokeMesherTest
 			System.out.println(style + " rainbow: " + (System.nanoTime() - start) / 1_000_000 + " ms, "
 				+ rainbow.pieces.stream().mapToInt(p -> p.faces).sum() + " faces");
 		}
-	}
+	}
 
 	@Test
 	public void rainbowHasTheSameShapeAndDistancesAlongTheLine()
@@ -303,13 +303,105 @@ public class StrokeMesherTest
 			rainbowVertices += p.vertices;
 			for (int i = 0; i < p.vertices; i++)
 			{
-				// The line starts 0.25 tiles into tile 3200, and the zone starts at tile 3200.
-				double expected = Math.max(0, Math.min(3.5 * 128, p.x[i] + (p.zoneX * 8 - 3200) * 128 - 0.25 * 128));
-				assertEquals(expected, p.d[i], 0.01);
+				// The line starts 0.25 tiles into tile 3200, and the zone starts at tile 3200. The brush of half the width
+				// last covers a vertex when it is ahead of the vertex by the rest of the brush radius.
+				double along = p.x[i] + (p.zoneX * 8 - 3200) * 128 - 0.25 * 128;
+				double off = p.y[i] + (p.zoneY * 8 - 3200) * 128 - 0.5 * 128;
+				double expected = Math.max(0, Math.min(3.5 * 128, along + Math.sqrt(Math.max(0, 100 - off * off))));
+				assertEquals(expected, p.d[i], 0.1);
 			}
 		}
 		// The small cells give the colors vertices close together.
 		assertTrue(rainbowVertices > plainVertices * 2);
+	}
+
+	@Test
+	public void rainbowScribbleInOnePlaceIsFastToDraw()
+	{
+		// A stroke that the player draws again and again over the same few tiles, as SceneStrokes makes it: the part of
+		// the last CHUNK_POINTS points is made again for each new point.
+		Random random = new Random(3);
+		List<StrokePoint> pts = new ArrayList<>();
+		double cx = 3200.5 * 128, cy = 3200.5 * 128, x = cx, y = cy, angle = 0;
+		for (int width : new int[]{40, 160})
+		{
+			pts.clear();
+			long worst = 0, total = 0;
+			int builds = 0;
+			for (int i = 0; i < 600; i++)
+			{
+				angle += random.nextGaussian() * 0.6;
+				// Pulled back to the middle, so the stroke stays on about three tiles.
+				angle += Math.atan2(cy - y, cx - x) * 0.05;
+				x += Math.cos(angle) * 14;
+				y += Math.sin(angle) * 14;
+				pts.add(new StrokePoint((int) Math.floor(x / 128), (int) Math.floor(y / 128),
+					(float) (x / 128 - Math.floor(x / 128)), (float) (y / 128 - Math.floor(y / 128))));
+				if (pts.size() < 2)
+				{
+					continue;
+				}
+				int from = (pts.size() - 2) / 48 * 48;
+				long start = System.nanoTime();
+				StrokeMesher.build(pts, from, pts.size() - 1, width, LineStyle.THROUGH_POINTS, SLOPE, true);
+				long time = System.nanoTime() - start;
+				if (i > 50)
+				{
+					worst = Math.max(worst, time);
+					total += time;
+					builds++;
+				}
+			}
+			long start = System.nanoTime();
+			StrokeMesher.Mesh whole = StrokeMesher.build(pts, 0, pts.size() - 1, width, LineStyle.THROUGH_POINTS, SLOPE, true);
+			System.out.println("scribble width " + width + ": part " + total / builds / 1000 + " us mean, " + worst / 1000
+				+ " us worst; whole " + (System.nanoTime() - start) / 1_000_000 + " ms, "
+				+ whole.pieces.stream().mapToInt(p -> p.faces).sum() + " faces; one color "
+				+ build(pts, width, LineStyle.THROUGH_POINTS, SLOPE).pieces.stream().mapToInt(p -> p.faces).sum() + " faces");
+		}
+	}
+
+	@Test
+	public void rainbowThatGoesBackShowsTheLaterPassOnTop()
+	{
+		// From x = 3200.25 to x = 3203.75 tiles and back: the way back covers the way there.
+		List<StrokePoint> pts = line(3200, 0.25f, 3203, 0.75f, 3200);
+		pts.add(new StrokePoint(3200, 3200, 0.25f, 0.5f));
+		StrokeMesher.Mesh mesh = StrokeMesher.build(pts, 0, 2, 20, LineStyle.STRAIGHT, FLAT, true);
+		double length = 3.5 * 128;
+		double expected = length * 20 + Math.PI * 10 * 10;
+		assertEquals(expected, area(mesh), expected * 0.01);
+		for (StrokeMesher.Piece p : mesh.pieces)
+		{
+			for (int i = 0; i < p.vertices; i++)
+			{
+				// Only the round cap at the turn is from the way there.
+				assertTrue(p.d[i] + " at " + p.x[i], p.d[i] >= length - 10 - 0.01);
+			}
+		}
+	}
+
+	@Test
+	public void rainbowScribbleCoversItsShapeOnce()
+	{
+		Random random = new Random(2);
+		List<StrokePoint> pts = new ArrayList<>();
+		double x = 3200.5 * 128, y = 3200.5 * 128, angle = 0;
+		for (int i = 0; i < 120; i++)
+		{
+			angle += 0.6 + random.nextGaussian() * 0.2;
+			x += Math.cos(angle) * 15;
+			y += Math.sin(angle) * 15;
+			pts.add(new StrokePoint((int) Math.floor(x / 128), (int) Math.floor(y / 128),
+				(float) (x / 128 - Math.floor(x / 128)), (float) (y / 128 - Math.floor(y / 128))));
+		}
+		for (LineStyle style : LineStyle.values())
+		{
+			StrokeMesher.Mesh plain = build(pts, 40, style, FLAT);
+			StrokeMesher.Mesh rainbow = StrokeMesher.build(pts, 0, pts.size() - 1, 40, style, FLAT, true);
+			// The polygons of the runs do not overlap, so their areas add up to the area of the shape.
+			assertEquals(style.toString(), area(plain), area(rainbow), area(plain) * 0.01);
+		}
 	}
 
 	@Test
@@ -320,7 +412,8 @@ public class StrokeMesherTest
 		{
 			pts.add(new StrokePoint(3200 + i, 3200, 0.5f, 0.5f));
 		}
-		// The part from point 4 starts 4 tiles along the line. Its round cap reaches half the width back.
+		// The part from point 4 starts 4 tiles along the line. The brush last covers its round cap at point 4, as in the
+		// whole stroke.
 		StrokeMesher.Mesh part = StrokeMesher.build(pts, 4, 8, 10, LineStyle.STRAIGHT, FLAT, true);
 		float min = Float.MAX_VALUE;
 		for (StrokeMesher.Piece p : part.pieces)
@@ -330,6 +423,6 @@ public class StrokeMesherTest
 				min = Math.min(min, p.d[i]);
 			}
 		}
-		assertEquals(4 * 128 - 5, min, 0.01);
+		assertEquals(4 * 128, min, 0.1);
 	}
 }

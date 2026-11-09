@@ -347,7 +347,7 @@ class SceneStrokes
 			{
 				// A rainbow stroke that crosses itself in two parts would have two colors at one place and one height, so
 				// they would flicker. One mesh of all points has each place once.
-				e.wantWhole();
+				e.wantWhole(s == current);
 			}
 			e.stroke = s;
 			e.alpha = alpha;
@@ -411,9 +411,10 @@ class SceneStrokes
 			int level = 0;
 			for (int k = 0; k < j; k++)
 			{
-				if (levels[k] >= level && shown.get(k).overlaps(e))
+				Entry older = shown.get(k);
+				if (levels[k] + older.levelCount() - 1 >= level && older.overlaps(e))
 				{
-					level = Math.min(MAX_LEVEL, levels[k] + 1);
+					level = Math.min(MAX_LEVEL, levels[k] + older.levelCount());
 				}
 			}
 			levels[j] = level;
@@ -472,9 +473,13 @@ class SceneStrokes
 			// Far zones have opaque models, so only strokes without alpha and without a white layer show there.
 			boolean opaque = rainbow != null ? rainbow.opaque : layers[1] >= 255 && layers[2] <= 0;
 			boolean whole = true;
-			for (StrokeMesher.Mesh mesh : e.meshes())
+			List<StrokeMesher.Mesh> meshes = e.meshes();
+			boolean tail = e.hasTail();
+			for (int m = 0; m < meshes.size(); m++)
 			{
-				for (StrokeMesher.Piece piece : mesh.pieces)
+				// The newest points of a stroke that the player draws are one level over the mesh of the older points.
+				int level = tail && m > 0 ? Math.min(MAX_LEVEL, levels[j] + 1) : levels[j];
+				for (StrokeMesher.Piece piece : meshes.get(m).pieces)
 				{
 					if (!shows(zoneReach(piece.zoneX, piece.zoneY), opaque))
 					{
@@ -488,7 +493,7 @@ class SceneStrokes
 						zone = new Zone(piece.zoneX, piece.zoneY);
 						zones.put(key, zone);
 					}
-					zone.add(frame, piece, levels[j], layers[0], layers[1], layers[2], piece.d != null ? rainbow : null);
+					zone.add(frame, piece, level, layers[0], layers[1], layers[2], piece.d != null ? rainbow : null);
 				}
 			}
 			// Points on tiles past the zones with models show over the game. Points on tiles without ground show nowhere.
@@ -1026,8 +1031,12 @@ class SceneStrokes
 		private final List<StrokeMesher.Mesh> chunks = new ArrayList<>();
 		private boolean complete;
 		// One mesh of all points, for a transparent stroke: the parts overlap where they join and where the stroke
-		// crosses itself, so a transparent stroke made of parts gets darker there.
+		// crosses itself, so a transparent stroke made of parts gets darker there. While the player draws, it can be the
+		// mesh of the first wholeSize points only, and the parts of the newer points show over it (hasTail).
 		private StrokeMesher.Mesh whole;
+		private int wholeSize;
+		// The point count of the mesh that the worker makes.
+		private int pendingSize;
 		// The meshes for the last width or style. They show until the new meshes are complete, so a new width (a zoom
 		// with Scale width with zoom off) or style does not move strokes over the game for some frames.
 		private List<StrokeMesher.Mesh> stale;
@@ -1092,7 +1101,10 @@ class SceneStrokes
 					chunks.remove(chunks.size() - 1);
 				}
 				size = n;
-				changed();
+				// The points only grew, so the mesh of all points, and the one that the worker makes, are still right for
+				// the older points.
+				complete = false;
+				changedFrame = frame;
 			}
 			if (!complete)
 			{
@@ -1124,10 +1136,15 @@ class SceneStrokes
 			{
 				try
 				{
-					whole = pending.get();
-					if (whole != null)
+					StrokeMesher.Mesh made = pending.get();
+					if (made != null)
 					{
-						box(Collections.singletonList(whole));
+						whole = made;
+						wholeSize = pendingSize;
+						if (wholeSize >= size)
+						{
+							box(Collections.singletonList(whole));
+						}
 						version++;
 					}
 				}
@@ -1172,20 +1189,51 @@ class SceneStrokes
 
 		List<StrokeMesher.Mesh> meshes()
 		{
-			return whole != null ? Collections.singletonList(whole) : !complete && stale != null ? stale : chunks;
+			if (!complete)
+			{
+				return stale != null ? stale : chunks;
+			}
+			if (whole == null)
+			{
+				return chunks;
+			}
+			if (!hasTail())
+			{
+				return Collections.singletonList(whole);
+			}
+			// The mesh of the older points, then the parts from the one with the last segment of that mesh.
+			List<StrokeMesher.Mesh> list = new ArrayList<>();
+			list.add(whole);
+			list.addAll(chunks.subList(Math.min(chunks.size() - 1, (wholeSize - 1) / CHUNK_POINTS), chunks.size()));
+			return list;
+		}
+
+		/** True if meshes() is the mesh of the older points, then the parts of the newer points, one level higher. */
+		boolean hasTail()
+		{
+			return complete && whole != null && wholeSize < size && !chunks.isEmpty();
+		}
+
+		/** The levels that the stroke uses: 2 with a tail, else 1. */
+		int levelCount()
+		{
+			return hasTail() ? 2 : 1;
 		}
 
 		/**
 		 * A transparent stroke of more than one part gets one mesh of all points, made on the worker thread when the
-		 * stroke stays the same for STABLE_FRAMES frames. The ground heights go with it, so the worker does not read
-		 * the scene.
+		 * stroke stays the same for STABLE_FRAMES frames. While the player draws the stroke, the worker makes it again
+		 * each time it is done, so only the newest points show as parts. The ground heights go with it, so the worker
+		 * does not read the scene.
 		 */
-		void wantWhole()
+		void wantWhole(boolean drawing)
 		{
-			if (!complete || whole != null || pending != null || chunks.size() <= 1 || frame - changedFrame < STABLE_FRAMES || worker == null)
+			if (!complete || pending != null || chunks.size() <= 1 || worker == null || whole != null && wholeSize >= size
+				|| !drawing && frame - changedFrame < STABLE_FRAMES)
 			{
 				return;
 			}
+			pendingSize = size;
 			List<StrokePoint> points = new ArrayList<>(pts.subList(0, size));
 			double w = width;
 			LineStyle st = style;

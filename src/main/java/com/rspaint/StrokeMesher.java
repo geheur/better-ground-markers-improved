@@ -143,7 +143,8 @@ final class StrokeMesher
 
 	/**
 	 * As the other build. For a rainbow stroke, the polygons are cut into RAINBOW_CELL squares, and each vertex gets how far
-	 * along the line it is (Piece.d): the distance of the nearest place on the line through the points.
+	 * along the line it is (Piece.d): where the brush was when it last covered the vertex (Centerline.distanceAt). Where
+	 * the stroke crosses itself, the later pass covers the earlier one (buildRainbow).
 	 */
 	static Mesh build(List<StrokePoint> pts, int from, int to, double width, LineStyle style, Ground ground, boolean rainbow)
 	{
@@ -154,13 +155,236 @@ final class StrokeMesher
 		// All coordinates are world units from the southwest corner of the tile of the first point, so doubles stay exact.
 		long originX = (long) pts.get(from).getX() * TILE;
 		long originY = (long) pts.get(from).getY() * TILE;
+		if (rainbow)
+		{
+			return buildRainbow(pts, from, to, width, style, ground, originX, originY);
+		}
 		Shape outline = outline(pts, from, to, width, style, originX, originY);
 		Area area = new Area(flatten(outline, flatness(width)));
 		Rectangle2D bounds = area.getBounds2D();
-		Centerline line = rainbow ? new Centerline(pts, from, to, width, originX, originY) : null;
-		List<Piece> pieces = new Slabs(ground, originX, originY, rainbow ? RAINBOW_CELL : TILE, line).cut(area);
+		List<Piece> pieces = new Slabs(ground, originX, originY, TILE).cut(area);
 		return new Mesh(pieces, originX + bounds.getMinX(), originY + bounds.getMinY(),
 			originX + bounds.getMaxX(), originY + bounds.getMaxY());
+	}
+
+	/**
+	 * A rainbow stroke is cut into runs where it comes back over itself. Each run keeps only the ground that no later
+	 * run covers, so where the stroke crosses itself, the later pass shows on top with a sharp edge, as a newer stroke
+	 * does. A run does not cross itself, so it needs no cut inside, and a stroke that does not cross itself is one run.
+	 */
+	private static Mesh buildRainbow(List<StrokePoint> pts, int from, int to, double width, LineStyle style, Ground ground,
+		long originX, long originY)
+	{
+		int end = Math.min(pts.size() - 1, to + 1);
+		float[] all = Rainbow.distances(pts.subList(0, end + 1), null, 0);
+		double[] px = new double[end + 1 - from], py = new double[end + 1 - from];
+		for (int i = from; i <= end; i++)
+		{
+			StrokePoint p = pts.get(i);
+			px[i - from] = (long) p.getX() * TILE - originX + p.getSubx() * TILE;
+			py[i - from] = (long) p.getY() * TILE - originY + p.getSuby() * TILE;
+		}
+		List<int[]> runs = runs(px, py, all, from, to, width);
+
+		int count = runs.size();
+		double flatness = flatness(width);
+		Area[] areas = new Area[count];
+		Rectangle2D[] boxes = new Rectangle2D[count];
+		double minX = Double.MAX_VALUE, minY = Double.MAX_VALUE, maxX = -Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+		for (int k = 0; k < count; k++)
+		{
+			int[] run = runs.get(k);
+			areas[k] = new Area(flatten(outline(pts, run[0], run[1], width, style, originX, originY), flatness));
+			boxes[k] = areas[k].getBounds2D();
+			minX = Math.min(minX, boxes[k].getMinX());
+			minY = Math.min(minY, boxes[k].getMinY());
+			maxX = Math.max(maxX, boxes[k].getMaxX());
+			maxY = Math.max(maxY, boxes[k].getMaxY());
+		}
+
+		// The ground that the later runs show on, in blocks. Each block has the parts of the later runs that show and
+		// whose boxes touch the block. A place that a later run covers is in a block that both boxes touch, so a run
+		// needs only the blocks that its box touches. Without blocks, the area of all later runs gets large.
+		double block = Math.max(4 * TILE, 2 * width);
+		Map<Long, Area> shown = new HashMap<>();
+		Slabs slabs = new Slabs(ground, originX, originY, RAINBOW_CELL);
+		for (int k = count - 1; k >= 0; k--)
+		{
+			Rectangle2D box = boxes[k];
+			int bx0 = (int) Math.floor(box.getMinX() / block), bx1 = (int) Math.floor(box.getMaxX() / block);
+			int by0 = (int) Math.floor(box.getMinY() / block), by1 = (int) Math.floor(box.getMaxY() / block);
+			Area visible = areas[k];
+			for (int bx = bx0; bx <= bx1; bx++)
+			{
+				for (int by = by0; by <= by1; by++)
+				{
+					Area later = shown.get((long) bx << 32 | (by & 0xFFFFFFFFL));
+					if (later != null)
+					{
+						visible.subtract(later);
+					}
+				}
+			}
+			if (visible.isEmpty())
+			{
+				continue;
+			}
+			// The later runs and this one cover the same ground as the later runs and the part of this one that shows.
+			for (int bx = bx0; bx <= bx1; bx++)
+			{
+				for (int by = by0; by <= by1; by++)
+				{
+					shown.computeIfAbsent((long) bx << 32 | (by & 0xFFFFFFFFL), key -> new Area()).add(visible);
+				}
+			}
+			int[] run = runs.get(k);
+			// The ends of the part also look at the points next to it, so the parts of a stroke join with the colors of the
+			// whole stroke. Inside the part, a run looks only at its own points: where the stroke turns back over itself,
+			// the earlier pass must not give its colors to the later one.
+			int first = run[0] == from ? Math.max(0, from - 1) : run[0];
+			int last = run[1] == to ? end : run[1];
+			slabs.line = new Centerline(pts, first, last, width, originX, originY, all);
+			slabs.cut(visible);
+		}
+		if (minX > maxX)
+		{
+			minX = minY = maxX = maxY = 0;
+		}
+		return new Mesh(slabs.order, originX + minX, originY + minY, originX + maxX, originY + maxY);
+	}
+
+	/**
+	 * Cuts the points from to to into runs, as {first point, last point}. A run ends before a segment that comes within
+	 * the width of a place on the run that is at least the width back along the line, so a run does not cross itself.
+	 * px and py are the points from point from, and all has the distances along the line.
+	 */
+	static List<int[]> runs(double[] px, double[] py, float[] all, int from, int to, double width)
+	{
+		List<int[]> runs = new ArrayList<>();
+		if (to <= from)
+		{
+			runs.add(new int[]{from, to});
+			return runs;
+		}
+		// The segments are checked in pieces of half the width, so the two sides of a sharp turn are far apart along
+		// the line, also when each side is one long segment.
+		double step = Math.max(width / 2, 4);
+		double cell = Math.max(width, 8);
+		double widthSq = width * width;
+		// The pieces of the run: x0, y0, x1, y1, and the distances along the line at their ends.
+		double[] pieces = new double[64 * 6];
+		int pieceCount = 0;
+		// The pieces of the run, by the grid squares that their boxes touch.
+		Map<Long, int[]> grid = new HashMap<>();
+		double[] made = new double[6];
+		int start = from;
+		for (int j = from; j < to; j++)
+		{
+			int a = j - from;
+			double sx = px[a + 1] - px[a], sy = py[a + 1] - py[a];
+			int n = Math.max(1, (int) Math.ceil(Math.sqrt(sx * sx + sy * sy) / step));
+			boolean back = false;
+			for (int m = 0; m < n && !back; m++)
+			{
+				piece(px[a], py[a], sx, sy, all[j], all[j + 1], (double) m / n, (double) (m + 1) / n, made);
+				int gx0 = (int) Math.floor(Math.min(made[0], made[2]) / cell), gx1 = (int) Math.floor(Math.max(made[0], made[2]) / cell);
+				int gy0 = (int) Math.floor(Math.min(made[1], made[3]) / cell), gy1 = (int) Math.floor(Math.max(made[1], made[3]) / cell);
+				for (int gx = gx0 - 1; gx <= gx1 + 1 && !back; gx++)
+				{
+					for (int gy = gy0 - 1; gy <= gy1 + 1 && !back; gy++)
+					{
+						int[] list = grid.get((long) gx << 32 | (gy & 0xFFFFFFFFL));
+						for (int k = 1; list != null && k <= list[0]; k++)
+						{
+							int p = list[k] * 6;
+							if (made[4] - pieces[p + 5] >= width && segmentDistanceSq(pieces[p], pieces[p + 1], pieces[p + 2],
+								pieces[p + 3], made[0], made[1], made[2], made[3]) < widthSq)
+							{
+								back = true;
+								break;
+							}
+						}
+					}
+				}
+			}
+			if (back)
+			{
+				runs.add(new int[]{start, j});
+				start = j;
+				grid.clear();
+				pieceCount = 0;
+			}
+			for (int m = 0; m < n; m++)
+			{
+				piece(px[a], py[a], sx, sy, all[j], all[j + 1], (double) m / n, (double) (m + 1) / n, made);
+				if ((pieceCount + 1) * 6 > pieces.length)
+				{
+					pieces = Arrays.copyOf(pieces, pieces.length * 2);
+				}
+				System.arraycopy(made, 0, pieces, pieceCount * 6, 6);
+				int gx0 = (int) Math.floor(Math.min(made[0], made[2]) / cell), gx1 = (int) Math.floor(Math.max(made[0], made[2]) / cell);
+				int gy0 = (int) Math.floor(Math.min(made[1], made[3]) / cell), gy1 = (int) Math.floor(Math.max(made[1], made[3]) / cell);
+				for (int gx = gx0; gx <= gx1; gx++)
+				{
+					for (int gy = gy0; gy <= gy1; gy++)
+					{
+						long key = (long) gx << 32 | (gy & 0xFFFFFFFFL);
+						int[] list = grid.get(key);
+						if (list == null)
+						{
+							list = new int[5];
+						}
+						else if (list[0] + 1 == list.length)
+						{
+							list = Arrays.copyOf(list, list.length * 2);
+						}
+						list[++list[0]] = pieceCount;
+						grid.put(key, list);
+					}
+				}
+				pieceCount++;
+			}
+		}
+		runs.add(new int[]{start, to});
+		return runs;
+	}
+
+	/** Writes the piece of the segment from t0 to t1 into out as x0, y0, x1, y1, and the distances at its ends. */
+	private static void piece(double x, double y, double sx, double sy, float d0, float d1, double t0, double t1, double[] out)
+	{
+		out[0] = x + sx * t0;
+		out[1] = y + sy * t0;
+		out[2] = x + sx * t1;
+		out[3] = y + sy * t1;
+		out[4] = d0 + (d1 - d0) * t0;
+		out[5] = d0 + (d1 - d0) * t1;
+	}
+
+	/** The square of the shortest distance between the segments (ax, ay)-(bx, by) and (cx, cy)-(dx, dy). */
+	static double segmentDistanceSq(double ax, double ay, double bx, double by, double cx, double cy, double dx, double dy)
+	{
+		double d1 = cross(ax, ay, bx, by, cx, cy), d2 = cross(ax, ay, bx, by, dx, dy);
+		double d3 = cross(cx, cy, dx, dy, ax, ay), d4 = cross(cx, cy, dx, dy, bx, by);
+		if ((d1 > 0) != (d2 > 0) && (d3 > 0) != (d4 > 0))
+		{
+			return 0;
+		}
+		return Math.min(Math.min(pointSegmentSq(ax, ay, cx, cy, dx, dy), pointSegmentSq(bx, by, cx, cy, dx, dy)),
+			Math.min(pointSegmentSq(cx, cy, ax, ay, bx, by), pointSegmentSq(dx, dy, ax, ay, bx, by)));
+	}
+
+	private static double cross(double ax, double ay, double bx, double by, double px, double py)
+	{
+		return (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+	}
+
+	private static double pointSegmentSq(double px, double py, double ax, double ay, double bx, double by)
+	{
+		double sx = bx - ax, sy = by - ay;
+		double lengthSq = sx * sx + sy * sy;
+		double t = lengthSq > 0 ? Math.max(0, Math.min(1, ((px - ax) * sx + (py - ay) * sy) / lengthSq)) : 0;
+		double dx = ax + sx * t - px, dy = ay + sy * t - py;
+		return dx * dx + dy * dy;
 	}
 
 	/**
@@ -268,19 +492,23 @@ final class StrokeMesher
 		// The segments near each square of BUCKET units, so a vertex looks only at the segments near it.
 		private static final int BUCKET = TILE;
 
-		// The points from the one before the part to the one after it, in the coordinates of build, with their distances.
+		// The points of the line, in the coordinates of build, with their distances.
 		private final double[] x, y;
 		private final float[] d;
 		private final int count;
+		// The square of half the width: the brush.
+		private final double radiusSq;
 		// For each square: the count of segments, then the segments.
 		private final Map<Long, int[]> buckets = new HashMap<>();
 
-		Centerline(List<StrokePoint> pts, int from, int to, double width, long originX, long originY)
+		/**
+		 * The line through the points from first to last. all has the distances of the points (Rainbow.distances), at
+		 * least up to last.
+		 */
+		Centerline(List<StrokePoint> pts, int first, int last, double width, long originX, long originY, float[] all)
 		{
-			int first = Math.max(0, from - 1);
-			int last = Math.min(pts.size() - 1, to + 1);
-			float[] all = Rainbow.distances(pts.subList(0, last + 1), null, 0);
 			count = last - first + 1;
+			radiusSq = width * width / 4;
 			x = new double[count];
 			y = new double[count];
 			d = new float[count];
@@ -320,7 +548,12 @@ final class StrokeMesher
 			}
 		}
 
-		/** Returns how far along the line the place on the line nearest to the point is. */
+		/**
+		 * Returns how far along the line the brush was when it last covered the point: the largest distance of a place on
+		 * the line that is at most half the width from the point. That is the color that a round brush leaves when it
+		 * paints along the line, as the overlay draws it. Where a curve bends away from the straight segments, a point
+		 * can be further than half the width from all of them, and gets the place on the line nearest to it.
+		 */
 		float distanceAt(double px, double py)
 		{
 			if (count == 1)
@@ -331,23 +564,46 @@ final class StrokeMesher
 			int[] list = buckets.get(key);
 			// Without a list, all segments.
 			int n = list != null ? list[0] : count - 1;
-			double best = Double.MAX_VALUE;
-			float result = d[0];
+			double nearestSq = Double.MAX_VALUE;
+			float nearest = d[0];
+			float last = Float.NaN;
 			for (int k = 0; k < n; k++)
 			{
 				int i = list != null ? list[k + 1] : k;
 				double sx = x[i + 1] - x[i], sy = y[i + 1] - y[i];
-				double lengthSq = sx * sx + sy * sy;
-				double t = lengthSq > 0 ? Math.max(0, Math.min(1, ((px - x[i]) * sx + (py - y[i]) * sy) / lengthSq)) : 0;
-				double dx = x[i] + sx * t - px, dy = y[i] + sy * t - py;
-				double distanceSq = dx * dx + dy * dy;
-				if (distanceSq < best)
+				double length = Math.sqrt(sx * sx + sy * sy);
+				double ox = px - x[i], oy = py - y[i];
+				// Along the segment from its start, and the square of the distance from the segment's line.
+				double along = length > 0 ? (ox * sx + oy * sy) / length : 0;
+				double offSq = Math.max(0, ox * ox + oy * oy - along * along);
+				double clamped = Math.max(0, Math.min(length, along));
+				double distanceSq = offSq + (along - clamped) * (along - clamped);
+				if (distanceSq < nearestSq)
 				{
-					best = distanceSq;
-					result = (float) (d[i] + (d[i + 1] - d[i]) * t);
+					nearestSq = distanceSq;
+					nearest = place(i, clamped, length);
+				}
+				if (offSq <= radiusSq)
+				{
+					// The brush covers the point from along - reach to along + reach on the segment.
+					double reach = Math.sqrt(radiusSq - offSq);
+					if (along - reach <= length && along + reach >= 0)
+					{
+						float place = place(i, Math.min(length, along + reach), length);
+						if (!(place <= last))
+						{
+							last = place;
+						}
+					}
 				}
 			}
-			return result;
+			return Float.isNaN(last) ? nearest : last;
+		}
+
+		/** The distance of the place that is at on segment i, which is length long. */
+		private float place(int i, double at, double length)
+		{
+			return length > 0 ? (float) (d[i] + (d[i + 1] - d[i]) * at / length) : d[i];
 		}
 	}
 
@@ -363,11 +619,12 @@ final class StrokeMesher
 		private final long originX, originY;
 		// The size of the squares that the polygons are cut into: TILE, or RAINBOW_CELL for a rainbow stroke.
 		private final int cell;
-		// The line of a rainbow stroke, for the distance of each vertex. Else null.
-		private final Centerline line;
+		// The line of a rainbow stroke, for the distance of each vertex. Else null. A rainbow stroke sets it for each run.
+		Centerline line;
 		private final long originTileX, originTileY;
 		private final Map<Long, Piece> pieces = new HashMap<>();
-		private final List<Piece> order = new ArrayList<>();
+		// The pieces of all calls of cut, one for each zone.
+		final List<Piece> order = new ArrayList<>();
 
 		// The edges, each {x at its low y, low y, x at its high y, high y}.
 		private double[] edges = new double[64];
@@ -381,19 +638,20 @@ final class StrokeMesher
 		private float[] pd = new float[16];
 		private final int[] corners = new int[4], other = new int[4];
 
-		Slabs(Ground ground, long originX, long originY, int cell, Centerline line)
+		Slabs(Ground ground, long originX, long originY, int cell)
 		{
 			this.ground = ground;
 			this.cell = cell;
-			this.line = line;
 			this.originX = originX;
 			this.originY = originY;
 			originTileX = originX / TILE;
 			originTileY = originY / TILE;
 		}
 
+		/** Adds the polygons of the area to the pieces. The areas of more calls must not overlap. */
 		List<Piece> cut(Area area)
 		{
+			edgeCount = 0;
 			double[] ys = readEdges(area);
 			if (edgeCount == 0)
 			{
