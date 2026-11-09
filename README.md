@@ -1,10 +1,6 @@
 # rspaint
-<video
-  src="rspaint.mp4"
-  autoplay loop muted playsinline controls
-  width="718">
-  <a href="rspaint.mp4">Watch the demo video</a>
-</video>
+
+https://github.com/user-attachments/assets/b4185c58-5b82-46d2-8918-7dff27cc88e6
 
 Press the draw hotkey (default `ctrl-b`) to turn draw mode on, then click and drag the mouse to doodle on the ground. Press `ctrl-e` to turn erase mode on. Press the hotkey again to turn the mode off.
 
