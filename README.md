@@ -1,9 +1,16 @@
 # rspaint
-Hold the hotkey (default `ctrl-b`) and click and drag the mouse to doodle on the ground. Hold `ctrl-e` to erase.
+<video
+  src="rspaint.mp4"
+  autoplay loop muted playsinline controls
+  width="718">
+  <a href="rspaint.mp4">Watch the demo video</a>
+</video>
+
+Press the draw hotkey (default `ctrl-b`) to turn draw mode on, then click and drag the mouse to doodle on the ground. Press `ctrl-e` to turn erase mode on. Press the hotkey again to turn the mode off.
 
 Change colors by clicking the menu on the left side of the screen.
 
-To use the hotkeys without holding them, turn on Toggle draw and erase in the settings. Then press a hotkey once to turn its mode on. Press it again to turn the mode off. Draw mode and erase mode cannot both be on. If you press the erase key in draw mode, erase mode replaces draw mode. The opposite is also true.
+To hold the hotkeys instead, turn off Toggle draw and erase in the settings. Then the mode is on only while you hold its hotkey. Draw mode and erase mode cannot both be on. If you press the erase key in draw mode, erase mode replaces draw mode. The opposite is also true.
 
 While you draw or erase, a left click draws or erases, and does not move your character.
 
@@ -11,7 +18,7 @@ A line shows only on the floor where you drew it. If you go up or down stairs, y
 
 If the GPU plugin loads the ground past the loading lines, lines show on that ground too.
 
-To undo your last line or erase, press the undo key (default `ctrl-z`) while you draw or erase. To redo it, press the redo key (default `ctrl-y`). One erase drag undoes as one change. Undo goes back 100 changes. If you are in a party, your party members see the undo and the redo too. Reset canvas deletes the undo history.
+To undo your last line or erase, press the undo key (default `ctrl-z`) while you draw or erase. To redo it, press the redo key (default `ctrl-shift-z`). One erase drag undoes as one change. Undo goes back 100 changes. If you are in a party, your party members see the undo and the redo too. Reset canvas deletes the undo history.
 
 The toolbar has 20 color slots, a button that resets the palette, and buttons that change the stroke size. The toolbar shows only while you draw or erase. Colors can be transparent. Use the Rendering settings to change how strokes look on your screen.
 
