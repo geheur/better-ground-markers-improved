@@ -21,7 +21,8 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "drawKeybind",
 		name = "Draw keybind",
-		description = "Hold this key and click and drag to draw. If Toggle draw and erase is on, press it to turn draw mode on or off."
+		description = "Hold this key and click and drag to draw. If Toggle draw and erase is on, press it to turn draw mode on or off.",
+		position = 0
 	)
 	default Keybind drawKeybind()
 	{
@@ -31,7 +32,8 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "eraseKeybind",
 		name = "Erase keybind",
-		description = "Hold this key and click and drag to erase. If Toggle draw and erase is on, press it to turn erase mode on or off."
+		description = "Hold this key and click and drag to erase. If Toggle draw and erase is on, press it to turn erase mode on or off.",
+		position = 1
 	)
 	default Keybind eraseKeybind()
 	{
@@ -39,19 +41,10 @@ public interface RsPaintConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "toggleModes",
-		name = "Toggle draw and erase",
-		description = "Press the draw or erase key once to turn the mode on, and again to turn it off, instead of holding the key."
-	)
-	default boolean toggleModes()
-	{
-		return false;
-	}
-
-	@ConfigItem(
 		keyName = "undoKeybind",
 		name = "Undo keybind",
-		description = "In draw mode or erase mode, press this key to undo your last line or erase."
+		description = "In draw mode or erase mode, press this key to undo your last line or erase.",
+		position = 2
 	)
 	default Keybind undoKeybind()
 	{
@@ -61,26 +54,50 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "redoKeybind",
 		name = "Redo keybind",
-		description = "In draw mode or erase mode, press this key to redo the last change that you undid."
+		description = "In draw mode or erase mode, press this key to redo the last change that you undid.",
+		position = 3
 	)
 	default Keybind redoKeybind()
 	{
-		return new Keybind(KeyEvent.VK_Y, InputEvent.CTRL_DOWN_MASK);
+		return new Keybind(KeyEvent.VK_Z, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK);
+	}
+
+	@ConfigItem(
+		keyName = "toggleModes",
+		name = "Toggle draw and erase",
+		description = "Press the draw or erase key once to turn the mode on, and again to turn it off, instead of holding the key.",
+		position = 4
+	)
+	default boolean toggleModes()
+	{
+		return true;
 	}
 
 	@ConfigSection(
 		name = "Rendering",
 		description = "These settings change only how strokes look on your screen. They do not change the strokes that party members get.",
-		position = 2
+		position = 5
 	)
 	String renderingSection = "rendering";
+
+	@ConfigItem(
+		keyName = "lineStyle",
+		name = "Line style",
+		description = "Straight connects the points with straight lines. Smooth draws curves near the points and hides small steps. Smooth through points draws curves that touch each point.",
+		section = renderingSection,
+		position = 0
+	)
+	default LineStyle lineStyle()
+	{
+		return LineStyle.STRAIGHT;
+	}
 
 	@ConfigItem(
 		keyName = "antialiasing",
 		name = "Smooth edges",
 		description = "Draws strokes with antialiasing (soft line edges).",
 		section = renderingSection,
-		position = 0
+		position = 1
 	)
 	default boolean antialiasing()
 	{
@@ -88,15 +105,15 @@ public interface RsPaintConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "lineStyle",
-		name = "Line style",
-		description = "Straight connects the points with straight lines. Smooth draws curves near the points and hides small steps. Smooth through points draws curves that touch each point.",
+		keyName = "scaleWidthWithZoom",
+		name = "Scale width with zoom",
+		description = "Makes strokes wider when you zoom in and thinner when you zoom out, so that they keep their size on the ground. The stroke size on the toolbar is the width at the default zoom in fixed mode.",
 		section = renderingSection,
-		position = 1
+		position = 2
 	)
-	default LineStyle lineStyle()
+	default boolean scaleWidthWithZoom()
 	{
-		return LineStyle.SMOOTH;
+		return true;
 	}
 
 	@ConfigItem(
@@ -104,7 +121,7 @@ public interface RsPaintConfig extends Config
 		name = "Transparent strokes",
 		description = "Lets the game show through strokes that have a transparent color, and through all strokes if Stroke opacity is less than 100%. Where a stroke crosses itself, it does not get darker. Where a stroke crosses an older stroke, the colors mix. If this is off, all strokes are opaque.",
 		section = renderingSection,
-		position = 2
+		position = 3
 	)
 	default boolean transparentStrokes()
 	{
@@ -118,23 +135,11 @@ public interface RsPaintConfig extends Config
 		name = "Stroke opacity",
 		description = "Changes the opacity of all strokes, if Transparent strokes is on. It multiplies the opacity of each stroke color. At 100%, each stroke keeps the opacity of its color.",
 		section = renderingSection,
-		position = 3
+		position = 4
 	)
 	default int strokeOpacity()
 	{
 		return 100;
-	}
-
-	@ConfigItem(
-		keyName = "scaleWidthWithZoom",
-		name = "Scale width with zoom",
-		description = "Makes strokes wider when you zoom in and thinner when you zoom out, so that they keep their size on the ground. The stroke size on the toolbar is the width at the default zoom in fixed mode.",
-		section = renderingSection,
-		position = 4
-	)
-	default boolean scaleWidthWithZoom()
-	{
-		return true;
 	}
 
 	@Range(min = 0, max = Constants.EXTENDED_SCENE_SIZE)
