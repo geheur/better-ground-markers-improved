@@ -29,7 +29,8 @@
 package com.rspaint;
 
 import java.awt.Color;
-import net.runelite.api.JagexColor;
+import java.util.HashMap;
+import java.util.Map;
 import net.runelite.api.Model;
 
 /**
@@ -52,15 +53,76 @@ final class FlatModel
 	{
 	}
 
+	/** All packed HSL values. */
+	private static final int HSL_COUNT = 1 << 16;
+	// The sRGB color that the renderer shows for each packed HSL, as r, g, b, for tableGamma.
+	private static float[] table;
+	private static float tableGamma = Float.NaN;
+	// The nearest packed HSL of an RGB color, by gamma and color.
+	private static final Map<Long, Integer> nearest = new HashMap<>();
+	private static final int MAX_NEAREST = 512;
+
+	/**
+	 * Returns the packed HSL that the renderer shows nearest to the RGB color. The GPU plugin shows a packed HSL as
+	 * pow(rgb, gamma), with the brightness of the game as gamma. 117 HD shows it as rgb, so its gamma is 1.
+	 * JagexColor.rgbToHSL rounds each part up and wraps red to orange, so strokes got lighter and changed hue.
+	 * Client thread only.
+	 */
+	static int nearestHsl(Color color, float gamma)
+	{
+		int rgb = color.getRGB() & 0xFFFFFF;
+		long key = (long) Float.floatToIntBits(gamma) << 32 | rgb;
+		Integer known = nearest.get(key);
+		if (known != null)
+		{
+			return known;
+		}
+		if (table == null || Float.compare(gamma, tableGamma) != 0)
+		{
+			table = new float[HSL_COUNT * 3];
+			for (int hsl = 0; hsl < HSL_COUNT; hsl++)
+			{
+				rgb(hsl, table, hsl * 3);
+				for (int c = 0; c < 3; c++)
+				{
+					table[hsl * 3 + c] = (float) Math.pow(table[hsl * 3 + c], gamma);
+				}
+			}
+			tableGamma = gamma;
+		}
+		float r = (rgb >> 16 & 255) / 255f, g = (rgb >> 8 & 255) / 255f, b = (rgb & 255) / 255f;
+		int best = 0;
+		float bestDistance = Float.MAX_VALUE;
+		for (int hsl = 0; hsl < HSL_COUNT; hsl++)
+		{
+			int i = hsl * 3;
+			float dr = table[i] - r, dg = table[i + 1] - g, db = table[i + 2] - b;
+			// The "redmean" distance, which is nearer to what the eye sees than the plain distance.
+			float redMean = (table[i] + r) / 2;
+			float distance = (2 + redMean) * dr * dr + 4 * dg * dg + (3 - redMean) * db * db;
+			if (distance < bestDistance)
+			{
+				bestDistance = distance;
+				best = hsl;
+			}
+		}
+		if (nearest.size() >= MAX_NEAREST)
+		{
+			nearest.clear();
+		}
+		nearest.put(key, best);
+		return best;
+	}
+
 	/**
 	 * Writes the color as up to two layers into out, as {hsl, alpha, white alpha}. With the lightness cap of 117 HD, a
 	 * color that is lighter than the cap is the hue and saturation at the highest lightness that the cap lets through,
 	 * with white over it, at an alpha that makes both together look like the color. Otherwise there is one layer, and
-	 * the white alpha is 0.
+	 * the white alpha is 0. The gamma is as for nearestHsl.
 	 */
-	static void layers(Color color, int alpha, boolean lightnessCap, int[] out)
+	static void layers(Color color, int alpha, boolean lightnessCap, float gamma, int[] out)
 	{
-		int hsl = JagexColor.rgbToHSL(color.getRGB(), 1.0) & 0xFFFF;
+		int hsl = nearestHsl(color, gamma);
 		out[0] = hsl;
 		out[1] = alpha;
 		out[2] = 0;
@@ -107,11 +169,21 @@ final class FlatModel
 	}
 
 	/** Packed HSL as sRGB from 0 to 1, as 117 HD converts it (convertHsl, hslToSrgb). */
-	private static float[] rgb(int hsl)
+	static float[] rgb(int hsl)
+	{
+		float[] out = new float[3];
+		rgb(hsl, out, 0);
+		return out;
+	}
+
+	/** Writes the packed HSL as sRGB from 0 to 1 into out at offset. The GPU plugin uses the same formula. */
+	private static void rgb(int hsl, float[] out, int offset)
 	{
 		float h = (hsl >> 10 & 63) / 64f + 0.0078125f, s = (hsl >> 7 & 7) / 8f + 0.0625f, l = (hsl & 127) / 128f;
 		float q = l < 0.5f ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
-		return new float[]{hue(p, q, h + 1 / 3f), hue(p, q, h), hue(p, q, h - 1 / 3f)};
+		out[offset] = hue(p, q, h + 1 / 3f);
+		out[offset + 1] = hue(p, q, h);
+		out[offset + 2] = hue(p, q, h - 1 / 3f);
 	}
 
 	private static float hue(float p, float q, float t)

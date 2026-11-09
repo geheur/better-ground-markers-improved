@@ -25,6 +25,7 @@ import net.runelite.api.Constants;
 import net.runelite.api.Model;
 import net.runelite.api.RuneLiteObjectController;
 import net.runelite.api.Scene;
+import net.runelite.api.TextureProvider;
 import net.runelite.api.Tile;
 import net.runelite.api.WorldView;
 import net.runelite.client.config.ConfigManager;
@@ -109,6 +110,8 @@ class SceneStrokes
 	private boolean active;
 	// Whether 117 HD caps the lightness of colors, so light colors need a white layer. Null to read it again.
 	private Boolean lightnessCap;
+	// Whether 117 HD is on. Read with lightnessCap.
+	private boolean hdActive;
 
 	private final Map<Stroke, Entry> entries = new IdentityHashMap<>();
 	private final Map<Long, Zone> zones = new HashMap<>();
@@ -234,11 +237,22 @@ class SceneStrokes
 					break;
 				}
 			}
+			hdActive = hd;
 			String shading = configManager.getConfiguration("hd", "experimentalShadingMode");
 			lightnessCap = hd && (shading == null || "DEFAULT".equals(shading))
 				&& !"true".equals(configManager.getConfiguration("hd", "legacyGreyColors"));
 		}
 		return lightnessCap;
+	}
+
+	/**
+	 * The gamma that the renderer applies to colors (see FlatModel.nearestHsl): the brightness of the game for the GPU
+	 * plugin, and 1 for 117 HD, which does not use it. Call it after lightnessCap.
+	 */
+	private float gamma()
+	{
+		TextureProvider textures = hdActive ? null : client.getTextureProvider();
+		return textures == null ? 1f : (float) textures.getBrightness();
 	}
 
 	/**
@@ -391,11 +405,12 @@ class SceneStrokes
 	private boolean assemble()
 	{
 		boolean cap = lightnessCap();
+		float gamma = gamma();
 		for (int j = 0; j < shown.size(); j++)
 		{
 			Entry e = shown.get(j);
 			float lift = BASE_LIFT + levels[j] * LIFT_STEP;
-			int[] layers = e.layers(cap);
+			int[] layers = e.layers(cap, gamma);
 			boolean whole = true;
 			for (StrokeMesher.Mesh mesh : e.meshes())
 			{
@@ -847,15 +862,17 @@ class SceneStrokes
 		private Color layersColor;
 		private int layersAlpha = -1;
 		private boolean layersCap;
+		private float layersGamma = Float.NaN;
 
-		int[] layers(boolean cap)
+		int[] layers(boolean cap, float gamma)
 		{
-			if (stroke.color != layersColor || alpha != layersAlpha || cap != layersCap)
+			if (stroke.color != layersColor || alpha != layersAlpha || cap != layersCap || Float.compare(gamma, layersGamma) != 0)
 			{
-				FlatModel.layers(stroke.color, alpha, cap, layers);
+				FlatModel.layers(stroke.color, alpha, cap, gamma, layers);
 				layersColor = stroke.color;
 				layersAlpha = alpha;
 				layersCap = cap;
+				layersGamma = gamma;
 			}
 			return layers;
 		}
