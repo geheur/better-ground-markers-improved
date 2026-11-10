@@ -127,7 +127,10 @@ public class RsPaintPlugin extends Plugin
 
 		// A random 63-bit number in base 36. It is shorter than a UUID, and only one member's strokes must not collide.
 		// Strokes saved before ids existed get a new id when they load.
-		String id = Long.toString(ThreadLocalRandom.current().nextLong() & Long.MAX_VALUE, Character.MAX_RADIX);
+		String id = newId();
+		// In an instance, the id of the saved template stroke that this stroke is a copy of (InstanceMap), or null if
+		// the stroke is not saved yet. A template chunk can show in more than one place, so copies can share it.
+		transient String templateId;
 		List<StrokePoint> pts = new ArrayList<>();
 		Color color;
 		double strokeWidth;
@@ -145,6 +148,12 @@ public class RsPaintPlugin extends Plugin
 		// The color without its opacity. Made when first needed, so drawing does not make a new Color on each frame.
 		// Transient, so it is not saved with the stroke.
 		private transient Color opaqueColor;
+
+		/** Returns a new random stroke id. */
+		static String newId()
+		{
+			return Long.toString(ThreadLocalRandom.current().nextLong() & Long.MAX_VALUE, Character.MAX_RADIX);
+		}
 
 		/** Returns the color with full opacity. The color of a stroke does not change after the stroke is made. */
 		Color opaqueColor()

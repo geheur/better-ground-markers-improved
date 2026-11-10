@@ -24,8 +24,10 @@ import java.awt.geom.Point2D;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -144,10 +146,16 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	{
 		int region = new WorldPoint(point.getX(), point.getY(), 0).getRegionID();
 		List<Stroke> strokes = regionStrokes(region);
-		if (unreadableRegions.contains(region))
+		int saveRegion = saveRegion(point, plane);
+		if (saveRegion == -1)
+		{
+			// A tile of an instance without a template chunk. A stroke here cannot be saved.
+			return;
+		}
+		if (unreadableRegions.contains(saveRegion))
 		{
 			// The saved strokes of this region stay as they are, so a new stroke here would be lost on the next load.
-			warnUnreadableRegion(region);
+			warnUnreadableRegion(saveRegion);
 			return;
 		}
 		currentStroke = new Stroke();
@@ -200,15 +208,18 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		{
 			// The stroke is complete. Fewer points make saves, full syncs, exports and drawing faster.
 			int oldRegion = currentStroke.primaryRegion();
+			int oldSaveRegion = saveRegion(currentStroke.pts.get(0), currentStroke.plane);
 			List<StrokePoint> rawPts = currentStroke.pts;
 			currentStroke.pts = StrokeCodec.simplify(rawPts);
-			// Simplify rounds the points, so the first point can move onto a tile in the next region.
+			// Simplify rounds the points, so the first point can move onto a tile in the next region, or in an instance
+			// onto the next chunk, which can have another template region.
 			// Strokes are saved and found by their primary region, so the stroke must be in the list of that region.
 			int newRegion = currentStroke.primaryRegion();
-			if (newRegion != oldRegion)
+			if (newRegion != oldRegion || saveRegion(currentStroke.pts.get(0), currentStroke.plane) != oldSaveRegion)
 			{
 				regionStrokes(newRegion);
-				if (unreadableRegions.contains(newRegion))
+				int newSaveRegion = saveRegion(currentStroke.pts.get(0), currentStroke.plane);
+				if (newSaveRegion == -1 || unreadableRegions.contains(newSaveRegion))
 				{
 					// The next region cannot be saved. Keep the points as drawn, so the stroke stays in its region.
 					currentStroke.pts = rawPts;
@@ -898,15 +909,276 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		if (e.getGameState() != GameState.LOGGED_IN) return;
 
 		WorldView worldView = client.getTopLevelWorldView();
-		// Keep the same regions that drawing reads, so drawing does not read a region from the config again.
-		if (worldView != null) loadStrokes(sceneRegions(worldView));
+		if (worldView != null) loadScene(worldView);
 	}
 
 	// How many regions around the scene and its extended border also load and draw their strokes.
 	// One region lets a stroke that starts just outside the scene still show.
 	private static final int NEARBY_REGIONS = 1;
 
+	// The local player's loaded strokes, by the region of their first point. In an instance, the points and the regions
+	// are in instance coordinates, and the strokes are saved under their template regions (InstanceMap).
 	Map<Integer, List<Stroke>> strokesByRegion = new HashMap<>();
+
+	// The template chunks of the instance that the player is in, or null outside an instance.
+	private InstanceMap instanceMap = null;
+	// In an instance, the saved strokes of each template region of the scene, in template coordinates.
+	// The strokes of an unreadable region are not here.
+	private final Map<Integer, List<PartyCanvasSync.SyncedStroke>> templateStrokes = new HashMap<>();
+
+	/**
+	 * Returns the region whose config key the stroke with this first point saves to, or -1 if it cannot be saved.
+	 * Outside an instance, it is the region of the point. In an instance, it is the region of the template tile, as the
+	 * Ground Markers plugin saves its tiles. Then the stroke shows again in each instance that uses the same template.
+	 */
+	private int saveRegion(StrokePoint first, int plane)
+	{
+		if (instanceMap != null)
+		{
+			return instanceMap.templateRegion(first, plane);
+		}
+		return new WorldPoint(first.getX(), first.getY(), 0).getRegionID();
+	}
+
+	/** Loads the strokes of the scene, and unloads the strokes of all other regions. */
+	private void loadScene(WorldView worldView)
+	{
+		if (worldView.isInstance())
+		{
+			loadInstance(worldView);
+			return;
+		}
+		if (instanceMap != null)
+		{
+			// The player left the instance. Its strokes are saved in template coordinates already.
+			finishStroke();
+			instanceMap = null;
+			templateStrokes.clear();
+			strokesByRegion.clear();
+			unreadableRegions.clear();
+		}
+		// Keep the same regions that drawing reads, so drawing does not read a region from the config again.
+		loadStrokes(sceneRegions(worldView));
+	}
+
+	/**
+	 * Loads the saved strokes of the template regions of the instance, and puts a copy of each stroke at each place
+	 * in the instance that has its template chunk. If the scene has the same template chunks as before, for example
+	 * after a scene reload in the same instance, the loaded strokes stay, so undo, redo and the party sync keep the same
+	 * Stroke objects.
+	 */
+	private void loadInstance(WorldView worldView)
+	{
+		int[][][] chunks = worldView.getInstanceTemplateChunks();
+		int baseX = worldView.getBaseX();
+		int baseY = worldView.getBaseY();
+		if (instanceMap == null || !instanceMap.isSame(chunks, baseX, baseY))
+		{
+			// Save the stroke in progress with the old chunks, before its list goes.
+			finishStroke();
+			instanceMap = new InstanceMap(chunks, baseX, baseY);
+			templateStrokes.clear();
+			strokesByRegion.clear();
+			unreadableRegions.clear();
+
+			List<Stroke> loaded = new ArrayList<>();
+			for (int region : instanceMap.templateRegions())
+			{
+				List<PartyCanvasSync.SyncedStroke> saved = readTemplate(region);
+				if (saved == null)
+				{
+					continue;
+				}
+				for (PartyCanvasSync.SyncedStroke template : saved)
+				{
+					boolean first = true;
+					for (InstanceMap.Placement placement : instanceMap.placements(template))
+					{
+						Stroke copy = instanceCopy(template, placement, first);
+						first = false;
+						strokesByRegion.computeIfAbsent(copy.primaryRegion(), k -> new ArrayList<>()).add(copy);
+						loaded.add(copy);
+					}
+				}
+			}
+			if (!loaded.isEmpty())
+			{
+				// Party members in the same instance get the strokes at the same instance coordinates.
+				partySync.onStrokesRestored(loaded);
+			}
+		}
+		// Each region of the scene has a list, so a save can add copies without changing the keys of the map.
+		for (int region : sceneRegions(worldView))
+		{
+			strokesByRegion.computeIfAbsent(region, k -> new ArrayList<>());
+		}
+	}
+
+	/**
+	 * Returns a copy of the template stroke at the placement, in instance coordinates. The first copy has the id of the
+	 * template stroke. The other copies have ids made from it and the placement, so a reload of the same instance gives
+	 * them the same ids, and party members do not get them twice.
+	 */
+	private Stroke instanceCopy(PartyCanvasSync.SyncedStroke template, InstanceMap.Placement placement, boolean first)
+	{
+		Stroke stroke = PartyCanvasSync.fromSynced(template);
+		stroke.id = first ? template.getId() : template.getId() + "~" + placement.key();
+		stroke.templateId = template.getId();
+		stroke.plane = placement.getPlane();
+		stroke.pts.clear();
+		stroke.pts.addAll(instanceMap.toInstance(template, placement));
+		return stroke;
+	}
+
+	/**
+	 * Reads the saved strokes of the template region, in template coordinates, and keeps them in templateStrokes.
+	 * Returns null if they cannot be read. Then the region is in unreadableRegions, and it is not saved.
+	 */
+	private List<PartyCanvasSync.SyncedStroke> readTemplate(int region)
+	{
+		String key = "strokes_" + region;
+		String conf = configManager.getConfiguration(RsPaintConfig.GROUP, key);
+		List<PartyCanvasSync.SyncedStroke> strokes = new ArrayList<>();
+		if (conf != null)
+		{
+			StrokeStorage.Loaded loaded;
+			try
+			{
+				loaded = storage.read(conf);
+			}
+			catch (StrokeStorage.UnreadableStrokesException e)
+			{
+				log.warn("Cannot load the strokes of region {}: {}", region, e.getMessage());
+				unreadableRegions.add(region);
+				return null;
+			}
+			for (PartyCanvasSync.SyncedStroke stroke : loaded.getStrokes())
+			{
+				if (stroke.getId() == null)
+				{
+					// The copies of a stroke are found by its id when the region saves, so each stroke must have one.
+					stroke = new PartyCanvasSync.SyncedStroke(Stroke.newId(), stroke.getColor(), stroke.getStrokeWidth(),
+						stroke.getOrder(), stroke.getPlane(), stroke.getPoints(), stroke.getRainbow());
+				}
+				clock.advancePast(stroke.getOrder());
+				strokes.add(stroke);
+			}
+			if (loaded.getVersion() < StrokeStorage.FORMAT_VERSION)
+			{
+				migrate(key, loaded, conf);
+			}
+		}
+		templateStrokes.put(region, strokes);
+		return strokes;
+	}
+
+	/**
+	 * Saves the template regions from the strokes of the instance scene. A saved stroke whose template chunk is not in
+	 * the scene stays saved. A saved stroke that lost a copy, because the player erased it in one place, is erased in
+	 * all places. A new stroke is saved, and gets a copy at each other place of its template chunk.
+	 */
+	private void saveTemplates(Set<Integer> regions)
+	{
+		if (regions.isEmpty())
+		{
+			return;
+		}
+
+		// The strokes of the scene, by the template region of their first point.
+		Map<Integer, List<Stroke>> shownByRegion = new HashMap<>();
+		for (List<Stroke> strokes : strokesByRegion.values())
+		{
+			for (Stroke stroke : strokes)
+			{
+				int region = instanceMap.templateRegion(stroke);
+				if (regions.contains(region))
+				{
+					shownByRegion.computeIfAbsent(region, k -> new ArrayList<>()).add(stroke);
+				}
+			}
+		}
+
+		Set<Stroke> erased = Collections.newSetFromMap(new IdentityHashMap<>());
+		List<Stroke> added = new ArrayList<>();
+		for (int region : regions)
+		{
+			List<PartyCanvasSync.SyncedStroke> saved = templateStrokes.get(region);
+			if (saved == null || unreadableRegions.contains(region))
+			{
+				continue;
+			}
+			List<Stroke> shown = shownByRegion.getOrDefault(region, Collections.emptyList());
+			Map<String, List<Stroke>> copiesById = new HashMap<>();
+			for (Stroke stroke : shown)
+			{
+				if (stroke.templateId != null)
+				{
+					copiesById.computeIfAbsent(stroke.templateId, k -> new ArrayList<>()).add(stroke);
+				}
+			}
+
+			List<PartyCanvasSync.SyncedStroke> result = new ArrayList<>();
+			Set<String> keptIds = new HashSet<>();
+			for (PartyCanvasSync.SyncedStroke template : saved)
+			{
+				int places = instanceMap.placements(template).size();
+				List<Stroke> copies = copiesById.getOrDefault(template.getId(), Collections.emptyList());
+				if (places == 0 || copies.size() >= places)
+				{
+					result.add(template);
+					keptIds.add(template.getId());
+				}
+				else
+				{
+					erased.addAll(copies);
+				}
+			}
+
+			for (Stroke stroke : shown)
+			{
+				// A stroke that undo or redo puts back can have the id of a saved stroke that is erased now. It is new.
+				if (stroke.templateId != null && keptIds.contains(stroke.templateId) || erased.contains(stroke))
+				{
+					continue;
+				}
+				PartyCanvasSync.SyncedStroke template = instanceMap.toTemplate(stroke);
+				if (template == null)
+				{
+					continue;
+				}
+				result.add(template);
+				stroke.templateId = stroke.id;
+				InstanceMap.Placement own = instanceMap.placementOf(stroke);
+				for (InstanceMap.Placement placement : instanceMap.placements(template))
+				{
+					if (!placement.equals(own))
+					{
+						added.add(instanceCopy(template, placement, false));
+					}
+				}
+			}
+
+			templateStrokes.put(region, result);
+			configManager.setConfiguration(RsPaintConfig.GROUP, "strokes_" + region, storage.write(result));
+		}
+
+		if (!erased.isEmpty())
+		{
+			for (List<Stroke> strokes : strokesByRegion.values())
+			{
+				strokes.removeIf(erased::contains);
+			}
+			partySync.onStrokesErased(erased);
+		}
+		if (!added.isEmpty())
+		{
+			for (Stroke stroke : added)
+			{
+				strokesByRegion.computeIfAbsent(stroke.primaryRegion(), k -> new ArrayList<>()).add(stroke);
+			}
+			partySync.onStrokesRestored(added);
+		}
+	}
 
 	/** Loads the strokes of the regions, and unloads the strokes of all other regions. */
 	void loadStrokes(int[] regions) {
@@ -941,6 +1213,11 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	private final Set<Integer> unreadableRegions = new HashSet<>();
 
 	private List<Stroke> readStrokes(int regionId) {
+		if (instanceMap != null)
+		{
+			// The config keys of instance regions are not used. loadInstance loads the strokes of the template regions.
+			return new ArrayList<>();
+		}
 		String key = "strokes_" + regionId;
 		String conf = configManager.getConfiguration(RsPaintConfig.GROUP, key);
 		unreadableRegions.remove(regionId);
@@ -1011,6 +1288,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	}
 
 	void saveStrokes(int regionId) {
+		if (instanceMap != null)
+		{
+			// The strokes of the instance region save to the template regions of its chunks.
+			saveTemplates(instanceMap.templateRegionsIn(regionId));
+			return;
+		}
 		List<Stroke> strokes = strokesByRegion.get(regionId);
 		if (strokes == null || unreadableRegions.contains(regionId)) return;
 		List<PartyCanvasSync.SyncedStroke> synced = new ArrayList<>();
@@ -1032,7 +1315,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	{
 		currentStroke = null;
 		skippedPoint = null;
-		for (Map.Entry<Integer, List<Stroke>> entry : strokesByRegion.entrySet())
+		// A copy of the entries, because a save in an instance can add the list of a region.
+		for (Map.Entry<Integer, List<Stroke>> entry : new ArrayList<>(strokesByRegion.entrySet()))
 		{
 			if (!entry.getValue().isEmpty())
 			{
@@ -1897,6 +2181,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	 */
 	private void resetCanvas() {
 		strokesByRegion.clear();
+		instanceMap = null;
+		templateStrokes.clear();
 		unreadableRegions.clear();
 		warnedRegions.clear();
 		undoStack.clear();
@@ -1914,7 +2200,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			partySync.onCanvasCleared();
 			WorldView worldView = client.getTopLevelWorldView();
 			if (client.getGameState() == GameState.LOGGED_IN && worldView != null) {
-				loadStrokes(sceneRegions(worldView));
+				loadScene(worldView);
 			}
 		});
 	}
