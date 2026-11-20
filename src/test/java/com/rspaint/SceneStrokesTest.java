@@ -25,12 +25,12 @@ public class SceneStrokesTest
 	@Test
 	public void worldWidthMatchesTheOverlayAtTheReferenceDepth()
 	{
-		// Pixels on the screen at the reference depth: world units * scale / depth.
+		// Screen pixels: world units * scale / depth
 		float depth = SceneStrokes.REFERENCE_DEPTH;
 		int scale = 1024;
-		// Scale with zoom: the overlay draws width * scale / 512 pixels.
+		// With zoom
 		assertEquals(20 * 2, SceneStrokes.worldWidth(20, true, scale) * scale / depth, 1e-9);
-		// Without it: the overlay draws width pixels.
+		// Without zoom
 		assertEquals(5, SceneStrokes.worldWidth(5, false, scale) * scale / depth, 1e-9);
 	}
 

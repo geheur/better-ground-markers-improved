@@ -10,15 +10,8 @@ import java.util.List;
 import java.util.Set;
 import lombok.Value;
 
-/**
- * The template chunks of an instance scene. An instance is made of 8 by 8 tile chunks that the game copies from the
- * real map, the templates, and each copy can be turned by a quarter turn. The game puts each new instance at new
- * coordinates, so strokes in an instance are saved in the coordinates of the templates, as the Ground Markers plugin
- * saves its tiles. Then the strokes show again in the next instance that uses the same templates.
- *
- * <p>A stroke is anchored at the chunk of its first point. All points turn with that chunk, so the stroke keeps its
- * shape also when it goes into the next chunk, and the next chunk is from another place of the map.
- */
+// Instance coordinates change per instance, so strokes are saved in template coordinates
+// A stroke is anchored at the chunk of its first point, all points turn with it
 final class InstanceMap
 {
 	private static final int CHUNK_SIZE = 8;
@@ -27,7 +20,6 @@ final class InstanceMap
 	private final int baseX;
 	private final int baseY;
 
-	/** The place of a template chunk in the instance: the plane and the chunk of the scene. */
 	@Value
 	static class Placement
 	{
@@ -35,14 +27,13 @@ final class InstanceMap
 		int chunkX;
 		int chunkY;
 
-		/** A short text that is different for each placement, to make the ids of the copies of a stroke. */
 		String key()
 		{
 			return plane + "." + chunkX + "." + chunkY;
 		}
 	}
 
-	/** chunks is WorldView.getInstanceTemplateChunks(), indexed by plane, scene chunk x and scene chunk y. */
+	// chunks: WorldView.getInstanceTemplateChunks(), indexed plane, x, y
 	InstanceMap(int[][][] chunks, int baseX, int baseY)
 	{
 		this.chunks = copy(chunks);
@@ -50,26 +41,23 @@ final class InstanceMap
 		this.baseY = baseY;
 	}
 
-	/** True if the scene has the same template chunks at the same base, so the loaded strokes are still correct. */
 	boolean isSame(int[][][] chunks, int baseX, int baseY)
 	{
 		return this.baseX == baseX && this.baseY == baseY && Arrays.deepEquals(this.chunks, chunks);
 	}
 
-	/** Returns the region of the template tile under the instance tile, or -1 if the tile has no template chunk. */
+	// -1 without a template chunk
 	int templateRegion(StrokePoint point, int plane)
 	{
 		int data = chunkData(plane, chunkIndex(point.getX(), baseX), chunkIndex(point.getY(), baseY));
 		return data == -1 ? -1 : region(templateX(data), templateY(data));
 	}
 
-	/** Returns the template region of the first point of the stroke, or -1 if it has no template chunk. */
 	int templateRegion(Stroke stroke)
 	{
 		return stroke.pts.isEmpty() ? -1 : templateRegion(stroke.pts.get(0), stroke.plane);
 	}
 
-	/** Returns the regions of all template chunks of the scene. */
 	Set<Integer> templateRegions()
 	{
 		Set<Integer> regions = new LinkedHashSet<>();
@@ -89,7 +77,6 @@ final class InstanceMap
 		return regions;
 	}
 
-	/** Returns the regions of the template chunks that are in the instance region, on all planes. */
 	Set<Integer> templateRegionsIn(int instanceRegion)
 	{
 		int regionX = (instanceRegion >> 8) << 6;
@@ -118,17 +105,13 @@ final class InstanceMap
 		return regions;
 	}
 
-	/** Returns the placement of the chunk of the first point of the stroke. The stroke must have points. */
 	Placement placementOf(Stroke stroke)
 	{
 		StrokePoint first = stroke.pts.get(0);
 		return new Placement(stroke.plane, chunkIndex(first.getX(), baseX), chunkIndex(first.getY(), baseY));
 	}
 
-	/**
-	 * Returns the stroke in template coordinates, with the id of the stroke, or null if its first point has no template
-	 * chunk. The plane is the plane of the template.
-	 */
+	// Null without a template chunk at the first point
 	SyncedStroke toTemplate(Stroke stroke)
 	{
 		if (stroke.pts.isEmpty())
@@ -141,8 +124,7 @@ final class InstanceMap
 		{
 			return null;
 		}
-		// The game turns the template by the rotation to make the instance chunk, so the template is the instance chunk
-		// turned back.
+		// Undo the game rotation
 		int rotation = (4 - rotation(data)) & 3;
 		int fromX = baseX + placement.getChunkX() * CHUNK_SIZE;
 		int fromY = baseY + placement.getChunkY() * CHUNK_SIZE;
@@ -155,10 +137,7 @@ final class InstanceMap
 			points, stroke.rainbow ? Boolean.TRUE : null);
 	}
 
-	/**
-	 * Returns the places in the instance of the template chunk of the first point of the stroke. The list is empty if
-	 * the scene does not have that chunk. It has more than one place if the instance uses the chunk more than once.
-	 */
+	// Every place of the first point template chunk
 	List<Placement> placements(SyncedStroke template)
 	{
 		List<Placement> result = new ArrayList<>();
@@ -186,7 +165,6 @@ final class InstanceMap
 		return result;
 	}
 
-	/** Returns the points of the template stroke in instance coordinates at the placement. */
 	List<StrokePoint> toInstance(SyncedStroke template, Placement placement)
 	{
 		int data = chunkData(placement.getPlane(), placement.getChunkX(), placement.getChunkY());
@@ -200,11 +178,7 @@ final class InstanceMap
 		return points;
 	}
 
-	/**
-	 * Moves the point from the chunk at fromX, fromY to the chunk at toX, toY, and turns it by the rotation in quarter
-	 * turns, with the same formula as WorldPoint.rotate. The point can be outside the chunk. Then it turns with the
-	 * chunk, so a stroke keeps its shape. The place in the tile turns too, so a turned stroke is not mirrored.
-	 */
+	// As WorldPoint.rotate, subtile part turns too
 	static StrokePoint rotate(StrokePoint point, int fromX, int fromY, int rotation, int toX, int toY)
 	{
 		int x = point.getX() - fromX;
@@ -240,7 +214,7 @@ final class InstanceMap
 		return Math.floorDiv(world - base, CHUNK_SIZE);
 	}
 
-	// The same packing as WorldPoint.fromLocalInstance reads.
+	// Packing as read by WorldPoint.fromLocalInstance
 	private static int rotation(int data)
 	{
 		return data >> 1 & 0x3;
@@ -261,7 +235,7 @@ final class InstanceMap
 		return data >> 24 & 0x3;
 	}
 
-	/** The same formula as WorldPoint.getRegionID(). */
+	// As WorldPoint.getRegionID()
 	private static int region(int x, int y)
 	{
 		return (x >> 6) << 8 | y >> 6;

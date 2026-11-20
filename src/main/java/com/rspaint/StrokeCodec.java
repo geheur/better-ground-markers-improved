@@ -14,24 +14,15 @@ import java.util.Base64;
 import java.util.Deque;
 import java.util.List;
 
-/**
- * Writes the points of a stroke as one short string, for party messages, exports and saved strokes.
- * Also removes the points of a complete stroke that do not change its shape.
- *
- * <p>Each position is rounded to 1/128 of a tile, which is one local unit. The first point is stored as its full
- * position, and each other point as the change from the point before it. Consecutive points are near each other,
- * so most changes fit in one byte (zigzag varint). The bytes are base64 with the URL alphabet and no padding,
- * so that Gson does not escape them.
- */
+// Points as base64 URL text without padding (Gson leaves it unescaped)
+// 1/128 tile units, first point absolute, rest zigzag varint deltas
 final class StrokeCodec
 {
 	static final int UNITS_PER_TILE = 128;
 
-	// Simplify removes a point if it is at most this many local units from the line between the kept points around it.
-	// 2 units is 1/64 of a tile: about half a pixel at the default zoom, and about 2 pixels at full zoom.
+	// 1/64 tile: about half a pixel at default zoom, 2 at full zoom
 	private static final double SIMPLIFY_TOLERANCE = 2;
 
-	// A change has at most 5 varint bytes. That is more than the int range of a position needs.
 	private static final int MAX_VARINT_BYTES = 5;
 
 	private StrokeCodec()
@@ -55,10 +46,7 @@ final class StrokeCodec
 		return Base64.getUrlEncoder().withoutPadding().encodeToString(out.toByteArray());
 	}
 
-	/**
-	 * Returns the points without the ones that are nearly on the line between their neighbors (Ramer-Douglas-Peucker).
-	 * The kept points are rounded to 1/128 tile, as encode rounds them, so you and your party have the same points.
-	 */
+	// Ramer-Douglas-Peucker, kept points rounded as in encode so party members match
 	static List<StrokePoint> simplify(List<StrokePoint> points)
 	{
 		int n = points.size();
@@ -78,7 +66,7 @@ final class StrokeCodec
 			keep[n - 1] = true;
 		}
 
-		// A stack of index ranges, not recursion, so a very long stroke cannot overflow the call stack.
+		// Index range stack instead of recursion, so long strokes cannot overflow
 		double toleranceSq = SIMPLIFY_TOLERANCE * SIMPLIFY_TOLERANCE;
 		Deque<int[]> ranges = new ArrayDeque<>();
 		if (n > 2)
@@ -120,7 +108,6 @@ final class StrokeCodec
 		return result;
 	}
 
-	/** Returns the points, or null if the string is not a valid encoding. */
 	static List<StrokePoint> decode(String encoded)
 	{
 		byte[] bytes;
@@ -158,7 +145,7 @@ final class StrokeCodec
 
 	private static long toUnits(int tile, float sub)
 	{
-		// Math.round of NaN is 0, so a bad sub-tile position cannot break the encoding.
+		// Math.round of NaN is 0
 		float clamped = Math.max(0f, Math.min(1f, sub));
 		return (long) tile * UNITS_PER_TILE + Math.round(clamped * UNITS_PER_TILE);
 	}
@@ -169,7 +156,7 @@ final class StrokeCodec
 		return tile >= Integer.MIN_VALUE && tile <= Integer.MAX_VALUE;
 	}
 
-	/** A position at the right or top edge of a tile becomes the left or bottom edge of the next tile. That is the same place. */
+	// Right or top tile edge becomes the next tile's left or bottom edge
 	private static StrokePoint fromUnits(long x, long y)
 	{
 		return new StrokePoint(
@@ -199,7 +186,7 @@ final class StrokeCodec
 		out.write((int) value);
 	}
 
-	/** Returns the value and moves the position past it, or returns -1 if the bytes end or the value is too long. */
+	// Returns -1 on truncated or overlong value
 	private static long readVarint(byte[] bytes, int[] position)
 	{
 		long value = 0;
@@ -219,7 +206,7 @@ final class StrokeCodec
 		return -1;
 	}
 
-	/** Reads and writes a point list with StrokeCodec. A bad string reads as null, so the stroke is skipped. */
+	// Bad strings read as null, stroke skipped
 	static final class PointsAdapter extends TypeAdapter<List<StrokePoint>>
 	{
 		@Override

@@ -57,15 +57,14 @@ import net.runelite.client.ui.components.shadowlabel.JShadowedLabel;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.client.util.SwingUtil;
 
-/** The side panel, styled after the Time Tracking plugin's panel. */
 @Slf4j
 @Singleton
 public class RsPaintPanel extends PluginPanel
 {
-	// PartyMember uses this name until the party service knows the real name.
+	// Until the party service knows the name
 	private static final String UNKNOWN_NAME = "<unknown>";
 
-	// The same switch as the plugin list's on/off toggle.
+	// Plugin list toggle look
 	private static final ImageIcon SWITCH_ON;
 	private static final ImageIcon SWITCH_OFF;
 
@@ -86,7 +85,7 @@ public class RsPaintPanel extends PluginPanel
 	private final JTextArea partyStatus = new WrappingTextArea();
 	private final JPanel memberList = new JPanel(new DynamicGridLayout(0, 1, 0, 0));
 
-	// Client thread only.
+	// Client thread only
 	private List<MemberRow> shownRows = null;
 
 	@Value
@@ -138,7 +137,6 @@ public class RsPaintPanel extends PluginPanel
 		add(scroll, BorderLayout.CENTER);
 	}
 
-	/** Builds the rows again on the Swing thread if the party members changed. */
 	void refresh()
 	{
 		clientThread.invokeLater(() -> {
@@ -153,7 +151,6 @@ public class RsPaintPanel extends PluginPanel
 		});
 	}
 
-	/** Makes the next refresh build all rows again. */
 	void reset()
 	{
 		clientThread.invokeLater(() -> shownRows = null);
@@ -298,7 +295,7 @@ public class RsPaintPanel extends PluginPanel
 		JPanel buttons = new JPanel(new DynamicGridLayout(0, 1, 0, 0));
 		buttons.setBackground(ColorScheme.DARK_GRAY_COLOR);
 		buttons.add(createButton("Import drawings",
-			"Add the drawings in the clipboard to your drawings. Party members see them too.", this::importDrawings));
+			"Add the drawings in the clipboard to yours and share them with your party.", this::importDrawings));
 		buttons.add(createButton("Export shown drawings",
 			"Copy the drawings of all players whose switch is on to the clipboard.", this::exportShownDrawings));
 		buttons.add(createButton("Reset canvas", "Delete your drawings in the area around you.", this::confirmReset));
@@ -357,7 +354,7 @@ public class RsPaintPanel extends PluginPanel
 		});
 	}
 
-	/** Collects the strokes on the client thread, then copies them to the clipboard on the Swing thread. */
+	// Collect on client thread, copy on Swing thread
 	private void exportDrawings(Supplier<List<SyncedStroke>> collect)
 	{
 		clientThread.invokeLater(() -> {
@@ -381,15 +378,15 @@ public class RsPaintPanel extends PluginPanel
 		}
 		catch (IllegalStateException e)
 		{
-			// Another program can hold the clipboard for a short time.
+			// Clipboard can be held by another program
 			log.warn("Could not copy drawings to the clipboard", e);
-			JOptionPane.showMessageDialog(this, "Could not copy to the clipboard. Try again.",
+			JOptionPane.showMessageDialog(this, "Couldn't copy to the clipboard, please try again.",
 				"Export drawings", JOptionPane.ERROR_MESSAGE);
 			return;
 		}
 
 		JOptionPane.showMessageDialog(this,
-			"Copied " + strokeCount(strokes.size()) + " to the clipboard. To import them, copy the text, then click Import drawings.",
+			"Copied " + strokeCount(strokes.size()) + " to the clipboard, ready to paste anywhere or bring back in with Import drawings.",
 			"Export drawings", JOptionPane.INFORMATION_MESSAGE);
 	}
 
@@ -403,14 +400,14 @@ public class RsPaintPanel extends PluginPanel
 		catch (IllegalStateException | IOException | UnsupportedFlavorException e)
 		{
 			log.warn("Could not read the clipboard", e);
-			JOptionPane.showMessageDialog(this, "Could not read the clipboard. Try again.",
+			JOptionPane.showMessageDialog(this, "Couldn't read the clipboard, please try again.",
 				"Import drawings", JOptionPane.ERROR_MESSAGE);
 			return;
 		}
 
 		if (text == null || text.trim().isEmpty())
 		{
-			JOptionPane.showMessageDialog(this, "The clipboard has no text. Copy an export, then click Import drawings.",
+			JOptionPane.showMessageDialog(this, "The clipboard is empty, so copy an export first and then click Import drawings.",
 				"Import drawings", JOptionPane.INFORMATION_MESSAGE);
 			return;
 		}
@@ -435,7 +432,7 @@ public class RsPaintPanel extends PluginPanel
 			return;
 		}
 
-		// The clipboard text is not visible, so the player confirms what the import adds.
+		// Clipboard text is not visible, so confirm
 		int result = JOptionPane.showConfirmDialog(this,
 			"Add " + strokeCount(strokes.size()) + " from the clipboard to your drawings?"
 				+ (overlay.isShowOwnStrokes() ? "" : " Turn on your switch to see them."),
@@ -446,7 +443,6 @@ public class RsPaintPanel extends PluginPanel
 		}
 	}
 
-	/** Returns the text in the clipboard, or null if the clipboard has no text. */
 	private static String readClipboardText() throws IOException, UnsupportedFlavorException
 	{
 		Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
@@ -465,7 +461,7 @@ public class RsPaintPanel extends PluginPanel
 	private void confirmReset()
 	{
 		int result = JOptionPane.showConfirmDialog(this,
-			"This deletes your drawings in the area around you. Your drawings in other places stay. You cannot undo this.",
+			"Delete your drawings in the area around you for you and your party? Drawings in other areas are kept, but this can't be undone.",
 			"Reset canvas", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
 		if (result == JOptionPane.OK_OPTION)
 		{
@@ -497,14 +493,13 @@ public class RsPaintPanel extends PluginPanel
 		refresh();
 	}
 
-	// Member names can arrive after the member joins.
+	// Member names can arrive after joining
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
 		refresh();
 	}
 
-	/** Measures its wrapped height at the parent's width, not the width from the last layout. */
 	private static class WrappingTextArea extends JTextArea
 	{
 		@Override
@@ -519,7 +514,7 @@ public class RsPaintPanel extends PluginPanel
 			}
 			else
 			{
-				// Before the first layout: the panel width minus the 10 pixel side borders.
+				// Before first layout, minus 10px side borders
 				width = PluginPanel.PANEL_WIDTH - 20;
 			}
 
@@ -531,7 +526,6 @@ public class RsPaintPanel extends PluginPanel
 		}
 	}
 
-	/** Takes the width of the scroll pane's viewport, so its content wraps instead of overflowing. */
 	private static class ViewportWidthPanel extends JPanel implements Scrollable
 	{
 		ViewportWidthPanel()
@@ -566,7 +560,7 @@ public class RsPaintPanel extends PluginPanel
 		@Override
 		public boolean getScrollableTracksViewportHeight()
 		{
-			// Fill the viewport when the content is shorter than it, and scroll when it is taller.
+			// Fill viewport when short, scroll when tall
 			return getParent() != null && getParent().getHeight() > getPreferredSize().height;
 		}
 	}

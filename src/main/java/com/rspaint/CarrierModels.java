@@ -36,26 +36,18 @@ import net.runelite.api.Model;
 import net.runelite.api.ModelData;
 import net.runelite.api.gameval.ItemID;
 
-/**
- * Makes models whose arrays RsPaint owns and writes. The API cannot make an empty model, so copies of a small model
- * from the game cache are merged, and all of their geometry is replaced. The item is never shown.
- */
 @Singleton
 class CarrierModels
 {
-	/*
-	 * The limits of the renderers for one model (GPU plugin ModelUploader: 6500 vertices, 4000 faces per priority).
-	 * The renderers skip a larger model and all faces in it, so carriers stay below the limits.
-	 */
+	// Under GPU plugin ModelUploader limits
 	static final int MAX_VERTICES = 6400;
 	static final int MAX_FACES = 3900;
 
 	private final Client client;
 	private ModelData seed;
-	// The seed has no geometry. It is not tried again until reset().
+	// Empty seed, no retry until reset()
 	private boolean seedFailed;
-	// The seed was tried in this frame. The client gives null while it still loads the model, so it is tried again
-	// in the next frame.
+	// Null while loading, retry next frame
 	private boolean triedThisFrame;
 
 	@Inject
@@ -64,7 +56,6 @@ class CarrierModels
 		this.client = client;
 	}
 
-	/** Starts a new frame: a seed that was still loading in the last frame is tried again. */
 	void nextFrame()
 	{
 		triedThisFrame = false;
@@ -94,13 +85,12 @@ class CarrierModels
 		return Math.max(-Math.floorDiv(-vertices, seed.getVerticesCount()), -Math.floorDiv(-faces, seed.getFaceCount()));
 	}
 
-	/** The most copies of the seed that stay in the renderer limits. Six more vertices fix the bounds. */
+	// Six vertices kept for bounds
 	private int maxCopies()
 	{
 		return Math.max(2, Math.min((MAX_VERTICES - 6) / seed.getVerticesCount(), MAX_FACES / seed.getFaceCount()));
 	}
 
-	/** Returns true if one model can hold this many vertices and faces. */
 	boolean fits(int vertices, int faces)
 	{
 		if (!seeded())
@@ -110,26 +100,14 @@ class CarrierModels
 		return copies(vertices + 6, faces) <= maxCopies();
 	}
 
-	/**
-	 * Returns true if create can make opaque models, which have no transparency array. The seed must not have one,
-	 * because a merged model has the array if one of its parts has it.
-	 */
+	// Merge keeps transparencies if any part has them
 	boolean canMakeOpaque()
 	{
 		return seeded() && seed.getFaceTransparencies() == null;
 	}
 
-	/**
-	 * Returns a model with at least this many vertices and faces, all faces hidden, and bounds fixed to the radius
-	 * around its origin. Returns null if the model cannot be made now.
-	 *
-	 * <p>The client finds the bounds of a model only once, so they are fixed here with temporary vertices at the
-	 * radius. The geometry that is written later must stay in the radius, because the GPU plugin sorts faces in the bounds.
-	 *
-	 * <p>A transparent model has a transparency array, so its faces can have alpha. The GPU plugin sorts its faces and
-	 * does not draw it if it is 6000 units or more across. An opaque model has no transparency array (see
-	 * canMakeOpaque). The GPU plugin draws it with the depth buffer, at any size.
-	 */
+	// Bounds are found once, so temporary vertices at radius fix them; later geometry must stay inside
+	// Transparent models are not drawn at 6000+ units across, opaque ones use the depth buffer
 	Model create(int vertices, int faces, int radius, boolean transparent)
 	{
 		if (!seeded())
@@ -140,11 +118,11 @@ class CarrierModels
 		ModelData[] parts = new ModelData[count];
 		for (int i = 0; i < count; i++)
 		{
-			// Merging joins vertices at the same position, so copies at the same place add no vertices. Each copy moves.
+			// Merge joins same-position vertices, so offset each copy
 			parts[i] = seed.shallowCopy().cloneVertices().translate(i * 2048, 0, 0);
 		}
 		ModelData data = client.mergeModels(parts).cloneVertices().cloneColors();
-		// The GPU plugin draws a model with a transparency array in its sorted pass for transparent faces.
+		// Transparency array selects the GPU sorted pass
 		if (transparent)
 		{
 			data = data.cloneTransparencies(true);
@@ -153,7 +131,7 @@ class CarrierModels
 		{
 			data = data.cloneTextures();
 		}
-		// Never change the arrays of the game cache.
+		// Never change game cache arrays
 		if (data.getFaceIndices1() == seed.getFaceIndices1() || data.getFaceIndices2() == seed.getFaceIndices2()
 			|| data.getFaceIndices3() == seed.getFaceIndices3() || data.getVerticesX() == seed.getVerticesX())
 		{
@@ -173,8 +151,7 @@ class CarrierModels
 		{
 			FlatModel.hide(model, f);
 		}
-		// The faces of the seed have render priorities, which renderers sort by before depth. A stroke face in such a
-		// slot would be drawn over all other faces.
+		// Seed priorities sort before depth, so zero them
 		byte[] priorities = model.getFaceRenderPriorities();
 		if (priorities != null)
 		{
@@ -193,11 +170,10 @@ class CarrierModels
 		z[4] = radius;
 		z[5] = -radius;
 		model.calculateBoundsCylinder();
-		// If the bounds were fixed before, geometry could go out of them.
+		// Bounds fixed too early let geometry escape
 		return model.getRadius() >= radius ? model : null;
 	}
 
-	/** Forgets the seed, for example after the plugin turns off. */
 	void reset()
 	{
 		seed = null;

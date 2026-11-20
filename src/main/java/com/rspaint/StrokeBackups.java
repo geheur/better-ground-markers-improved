@@ -13,10 +13,7 @@ import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.client.util.Filepath;
 
-/**
- * Saves saved text in an old format to a file before the overlay saves it again in the current format.
- * The files are in .runelite/plugin-data/rspaint/backups. The player can import a file through the panel.
- */
+// Backs up old-format text before it is rewritten
 @Slf4j
 @Singleton
 class StrokeBackups
@@ -25,7 +22,6 @@ class StrokeBackups
 
 	private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
-	// The most files with the same name and time. Real backups never get near this.
 	private static final int MAX_ATTEMPTS = 100;
 
 	private final RsPaintPlugin plugin;
@@ -38,12 +34,6 @@ class StrokeBackups
 		this.executor = executor;
 	}
 
-	/**
-	 * Writes the text to a new file on a background thread. The future fails if the file cannot be written.
-	 *
-	 * @param key the config key of the text, for example strokes_12850
-	 * @param version the format version of the text
-	 */
 	CompletableFuture<Void> save(String key, int version, String text)
 	{
 		String time = LocalDateTime.now().format(TIME);
@@ -70,19 +60,18 @@ class StrokeBackups
 			Filepath file = directory.joinSegment(fileName(key, version, time, attempt));
 			try
 			{
-				// Never write over an older backup.
+				// Never overwrite older backups
 				file.write(text, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
 				return file;
 			}
 			catch (FileAlreadyExistsException e)
 			{
-				// Try the next name.
 			}
 		}
 		throw new IOException("All backup names for " + key + " at " + time + " are in use.");
 	}
 
-	/** Returns the file name, for example strokes_12850_format1_20261109-153012.json. Attempts after the first get a number. */
+	// Like strokes_12850_format1_20261109-153012.json, number suffix after the first attempt
 	static String fileName(String key, int version, String time, int attempt)
 	{
 		String suffix = attempt <= 1 ? "" : "_" + attempt;

@@ -33,41 +33,32 @@ import java.util.HashMap;
 import java.util.Map;
 import net.runelite.api.Model;
 
-/**
- * Makes the faces of a carrier model show one flat color. The lit colors, the unlit colors and the vertex normals are
- * all set, because renderers read different ones: the GPU plugin reads faceColors1 to 3, and 117 HD can read the unlit
- * colors and lights faces with the vertex normals.
- */
+// GPU plugin reads faceColors1 to 3, 117 HD may read unlit colors and vertex normals, so set all
 final class FlatModel
 {
-	/** Packed HSL white: no saturation, full lightness. */
+	// Packed HSL, no saturation, full lightness
 	static final int WHITE = 127;
 
-	/** The smallest alpha that a white layer gets. Less white does not show, so it is left out. */
+	// Below this white is invisible
 	private static final int MIN_WHITE = 16;
 
-	/** WHITE as sRGB, as 117 HD converts it. */
 	private static final float[] WHITE_RGB = rgb(WHITE);
 
 	private FlatModel()
 	{
 	}
 
-	/** All packed HSL values. */
 	private static final int HSL_COUNT = 1 << 16;
-	// The sRGB color that the renderer shows for each packed HSL, as r, g, b, for tableGamma.
+	// Shown sRGB per packed HSL at tableGamma
 	private static float[] table;
 	private static float tableGamma = Float.NaN;
-	// The nearest packed HSL of an RGB color, by gamma and color.
+	// Cache by gamma and color
 	private static final Map<Long, Integer> nearest = new HashMap<>();
 	private static final int MAX_NEAREST = 512;
 
-	/**
-	 * Returns the packed HSL that the renderer shows nearest to the RGB color. The GPU plugin shows a packed HSL as
-	 * pow(rgb, gamma), with the brightness of the game as gamma. 117 HD shows it as rgb, so its gamma is 1.
-	 * JagexColor.rgbToHSL rounds each part up and wraps red to orange, so strokes got lighter and changed hue.
-	 * Client thread only.
-	 */
+	// GPU plugin shows pow(rgb, gamma), 117 HD shows rgb (gamma 1)
+	// Not JagexColor.rgbToHSL, which rounds up and wraps red to orange
+	// Client thread only
 	static int nearestHsl(Color color, float gamma)
 	{
 		int rgb = color.getRGB() & 0xFFFFFF;
@@ -97,7 +88,7 @@ final class FlatModel
 		{
 			int i = hsl * 3;
 			float dr = table[i] - r, dg = table[i + 1] - g, db = table[i + 2] - b;
-			// The "redmean" distance, which is nearer to what the eye sees than the plain distance.
+			// Redmean distance
 			float redMean = (table[i] + r) / 2;
 			float distance = (2 + redMean) * dr * dr + 4 * dg * dg + (3 - redMean) * db * db;
 			if (distance < bestDistance)
@@ -114,12 +105,7 @@ final class FlatModel
 		return best;
 	}
 
-	/**
-	 * Writes the color as up to two layers into out, as {hsl, alpha, white alpha}. With the lightness cap of 117 HD, a
-	 * color that is lighter than the cap is the hue and saturation at the highest lightness that the cap lets through,
-	 * with white over it, at an alpha that makes both together look like the color. Otherwise there is one layer, and
-	 * the white alpha is 0. The gamma is as for nearestHsl.
-	 */
+	// Writes {hsl, alpha, white alpha}, 117 HD lightness cap splits light colors into capped hsl plus white
 	static void layers(Color color, int alpha, boolean lightnessCap, float gamma, int[] out)
 	{
 		int hsl = nearestHsl(color, gamma);
@@ -136,7 +122,7 @@ final class FlatModel
 			return;
 		}
 		int capped = (hsl & ~127) | max;
-		// The color as a mix of the capped color and white: C = t * W + (1 - t) * P.
+		// C = t * W + (1 - t) * P
 		float[] p = rgb(capped);
 		float cr = color.getRed() / 255f, cg = color.getGreen() / 255f, cb = color.getBlue() / 255f;
 		float num = (cr - p[0]) * (WHITE_RGB[0] - p[0]) + (cg - p[1]) * (WHITE_RGB[1] - p[1]) + (cb - p[2]) * (WHITE_RGB[2] - p[2]);
@@ -150,7 +136,7 @@ final class FlatModel
 		{
 			return;
 		}
-		// White at alpha a * t over the capped color at a * (1 - t) / (1 - a * t) blends like the color at alpha a.
+		// White at a * t over capped at a * (1 - t) / (1 - a * t) equals color at alpha a
 		float a = alpha / 255f, whiteAlpha = a * t;
 		if (whiteAlpha * 255 < MIN_WHITE)
 		{
@@ -162,13 +148,13 @@ final class FlatModel
 		out[2] = Math.round(whiteAlpha * 255);
 	}
 
-	/** The lightness cap of 117 HD for a saturation from 0 to 7, as its undoVanillaShading. */
+	// 117 HD undoVanillaShading cap
 	private static int maxLightness(int saturation)
 	{
 		return (int) (127 - 72 * Math.pow(saturation / 7.0, 0.05));
 	}
 
-	/** Packed HSL as sRGB from 0 to 1, as 117 HD converts it (convertHsl, hslToSrgb). */
+	// As 117 HD hslToSrgb
 	static float[] rgb(int hsl)
 	{
 		float[] out = new float[3];
@@ -176,7 +162,7 @@ final class FlatModel
 		return out;
 	}
 
-	/** Writes the packed HSL as sRGB from 0 to 1 into out at offset. The GPU plugin uses the same formula. */
+	// Same formula as the GPU plugin
 	private static void rgb(int hsl, float[] out, int offset)
 	{
 		float h = (hsl >> 10 & 63) / 64f + 0.0078125f, s = (hsl >> 7 & 7) / 8f + 0.0625f, l = (hsl & 127) / 128f;
@@ -216,16 +202,11 @@ final class FlatModel
 		paint(m, face, hsl, hsl, hsl, alpha);
 	}
 
-	/**
-	 * Gives each corner of the face its own color. The renderers blend the corner colors over the face, so a face can go
-	 * from one color to the next. The unlit color is the color of the first corner.
-	 */
 	static void paint(Model m, int face, int hsl1, int hsl2, int hsl3, int alpha)
 	{
 		m.getFaceColors1()[face] = hsl1;
 		m.getFaceColors2()[face] = hsl2;
-		// Three equal corner colors draw the face in one color, and -2 hides it. Not -1 ("flat"): for flat faces
-		// 117 HD does not use the vertex normals and takes the normal of the triangle, which turns with the camera.
+		// -2 hides the face, -1 (flat) makes 117 HD use the camera-turning triangle normal
 		m.getFaceColors3()[face] = alpha == 0 ? -2 : hsl3;
 		int hsl = hsl1;
 		byte[] transparencies = m.getFaceTransparencies();
@@ -253,7 +234,7 @@ final class FlatModel
 		}
 	}
 
-	/** Points all vertex normals straight up. Model y is down, and the unit length is 256. */
+	// Model y is down, unit length 256
 	static void normals(Model m)
 	{
 		int[] nx = m.getVertexNormalsX(), ny = m.getVertexNormalsY(), nz = m.getVertexNormalsZ();
@@ -269,10 +250,9 @@ final class FlatModel
 		}
 	}
 
-	/** Finds the cached bounding box again after the vertices changed. The bounds cylinder stays fixed. */
 	static void bounds(Model m)
 	{
-		// The box is cached for each orientation, so a change to another orientation and back makes it again.
+		// Boxes are cached per orientation, query both to rebuild
 		m.getAABB(1);
 		m.getAABB(0);
 	}

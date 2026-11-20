@@ -20,7 +20,7 @@ public class StrokeMesherTest
 		return true;
 	};
 
-	/** Tiles that slope down to the east and are not flat planes, so the mesher must cut them along the diagonal. */
+	// Slopes down east, forcing diagonal cuts
 	private static final StrokeMesher.Ground SLOPE = (x, y, out) ->
 	{
 		out[0] = x * 50;
@@ -68,7 +68,7 @@ public class StrokeMesherTest
 	@Test
 	public void straightLineHasAreaOfStrokeShape()
 	{
-		// From x = 3200.25 to x = 3203.75 tiles: 3.5 tiles long.
+		// 3.5 tiles long
 		StrokeMesher.Mesh mesh = build(line(3200, 0.25f, 3203, 0.75f, 3200), 20, LineStyle.STRAIGHT, FLAT);
 		assertNotNull(mesh);
 		double expected = 3.5 * 128 * 20 + Math.PI * 10 * 10;
@@ -85,7 +85,7 @@ public class StrokeMesherTest
 	@Test
 	public void crossingStrokeDoesNotOverlapItself()
 	{
-		// A stroke that goes there and back covers its line once.
+		// Round trip covers its line once
 		List<StrokePoint> pts = line(3200, 0.25f, 3203, 0.75f, 3200);
 		pts.add(new StrokePoint(3200, 3200, 0.25f, 0.5f));
 		StrokeMesher.Mesh mesh = build(pts, 20, LineStyle.STRAIGHT, FLAT);
@@ -96,7 +96,7 @@ public class StrokeMesherTest
 	@Test
 	public void piecesAreSplitByZone()
 	{
-		// Tiles 3198 to 3201 are in zones 399 and 400.
+		// Tiles 3198 to 3201 span zones 399 and 400
 		StrokeMesher.Mesh mesh = build(line(3198, 0.5f, 3201, 0.5f, 3203), 10, LineStyle.STRAIGHT, FLAT);
 		assertEquals(2, mesh.pieces.size());
 		for (StrokeMesher.Piece p : mesh.pieces)
@@ -126,7 +126,7 @@ public class StrokeMesherTest
 					cx += p.x[first + i];
 					cy += p.y[first + i];
 				}
-				// The middle of the polygon tells which tile and triangle it is in.
+				// Polygon middle gives its tile and triangle
 				double wx = (double) p.zoneX * StrokeMesher.ZONE + cx / n, wy = (double) p.zoneY * StrokeMesher.ZONE + cy / n;
 				int tx = (int) Math.floor(wx / 128), ty = (int) Math.floor(wy / 128);
 				boolean south = (wx - tx * 128) + (wy - ty * 128) <= 128;
@@ -150,7 +150,7 @@ public class StrokeMesherTest
 	{
 		StrokeMesher.Ground half = (x, y, out) -> x < 3202 && FLAT.corners(x, y, out);
 		StrokeMesher.Mesh mesh = build(line(3200, 0f, 3204, 0f, 3200), 10, LineStyle.STRAIGHT, half);
-		// From x = 3200 tiles, less the half cap on the west side, to the end of tile 3201.
+		// Half cap west of x 3200 to end of tile 3201
 		double expected = 2 * 128 * 10 + Math.PI * 5 * 5 / 2;
 		assertEquals(expected, area(mesh), expected * 0.01);
 	}
@@ -161,12 +161,11 @@ public class StrokeMesherTest
 		List<StrokePoint> pts = new ArrayList<>();
 		pts.add(new StrokePoint(3200, 3200, 0.5f, 0.5f));
 		StrokeMesher.Mesh mesh = build(pts, 40, LineStyle.THROUGH_POINTS, FLAT);
-		// The round cap is straight lines, so it has a little less area than a circle.
+		// Round cap is polygonal, so slightly under circle area
 		assertEquals(Math.PI * 20 * 20, area(mesh), Math.PI * 20 * 20 * 0.03);
 		assertNull(StrokeMesher.build(new ArrayList<>(), 0, 0, 40, LineStyle.STRAIGHT, FLAT));
 	}
 
-	/** The ground covered by the polygons, as one area in world units. */
 	private static java.awt.geom.Area covered(List<StrokeMesher.Mesh> meshes)
 	{
 		java.awt.geom.Area all = new java.awt.geom.Area();
@@ -192,7 +191,7 @@ public class StrokeMesherTest
 						}
 					}
 					poly.closePath();
-					// A little larger, so the shared edges of polygons join.
+					// Slightly larger so shared edges join
 					all.add(new java.awt.geom.Area(new java.awt.BasicStroke(0.02f).createStrokedShape(poly)));
 					all.add(new java.awt.geom.Area(poly));
 					first += p.sizes[k];
@@ -287,7 +286,7 @@ public class StrokeMesherTest
 	@Test
 	public void rainbowHasTheSameShapeAndDistancesAlongTheLine()
 	{
-		// From x = 3200.25 to x = 3203.75 tiles: 3.5 tiles long.
+		// 3.5 tiles long
 		List<StrokePoint> pts = line(3200, 0.25f, 3203, 0.75f, 3200);
 		StrokeMesher.Mesh plain = build(pts, 20, LineStyle.STRAIGHT, SLOPE);
 		StrokeMesher.Mesh rainbow = StrokeMesher.build(pts, 0, 1, 20, LineStyle.STRAIGHT, SLOPE, true);
@@ -295,7 +294,7 @@ public class StrokeMesherTest
 		int plainVertices = 0, rainbowVertices = 0;
 		for (StrokeMesher.Piece p : plain.pieces)
 		{
-			assertNull(p.d);
+			assertNull(p.distances);
 			plainVertices += p.vertices;
 		}
 		for (StrokeMesher.Piece p : rainbow.pieces)
@@ -303,23 +302,23 @@ public class StrokeMesherTest
 			rainbowVertices += p.vertices;
 			for (int i = 0; i < p.vertices; i++)
 			{
-				// The line starts 0.25 tiles into tile 3200, and the zone starts at tile 3200. The brush of half the width
-				// last covers a vertex when it is ahead of the vertex by the rest of the brush radius.
+				// Line starts 0.25 tiles into tile 3200, zone at 3200; brush covers a vertex
+				// when ahead of it by the rest of the radius
 				double along = p.x[i] + (p.zoneX * 8 - 3200) * 128 - 0.25 * 128;
 				double off = p.y[i] + (p.zoneY * 8 - 3200) * 128 - 0.5 * 128;
 				double expected = Math.max(0, Math.min(3.5 * 128, along + Math.sqrt(Math.max(0, 100 - off * off))));
-				assertEquals(expected, p.d[i], 0.1);
+				assertEquals(expected, p.distances[i], 0.1);
 			}
 		}
-		// The small cells give the colors vertices close together.
+		// Small cells put color vertices close together
 		assertTrue(rainbowVertices > plainVertices * 2);
 	}
 
 	@Test
 	public void rainbowScribbleInOnePlaceIsFastToDraw()
 	{
-		// A stroke that the player draws again and again over the same few tiles, as SceneStrokes makes it: the part of
-		// the last CHUNK_POINTS points is made again for each new point.
+		// Repeated stroke over a few tiles, as SceneStrokes makes it:
+		// last CHUNK_POINTS points remeshed per new point
 		Random random = new Random(3);
 		List<StrokePoint> pts = new ArrayList<>();
 		double cx = 3200.5 * 128, cy = 3200.5 * 128, x = cx, y = cy, angle = 0;
@@ -331,7 +330,7 @@ public class StrokeMesherTest
 			for (int i = 0; i < 600; i++)
 			{
 				angle += random.nextGaussian() * 0.6;
-				// Pulled back to the middle, so the stroke stays on about three tiles.
+				// Pulled to middle, keeps stroke on about three tiles
 				angle += Math.atan2(cy - y, cx - x) * 0.05;
 				x += Math.cos(angle) * 14;
 				y += Math.sin(angle) * 14;
@@ -364,7 +363,7 @@ public class StrokeMesherTest
 	@Test
 	public void rainbowThatGoesBackShowsTheLaterPassOnTop()
 	{
-		// From x = 3200.25 to x = 3203.75 tiles and back: the way back covers the way there.
+		// Way back covers the way there
 		List<StrokePoint> pts = line(3200, 0.25f, 3203, 0.75f, 3200);
 		pts.add(new StrokePoint(3200, 3200, 0.25f, 0.5f));
 		StrokeMesher.Mesh mesh = StrokeMesher.build(pts, 0, 2, 20, LineStyle.STRAIGHT, FLAT, true);
@@ -375,8 +374,8 @@ public class StrokeMesherTest
 		{
 			for (int i = 0; i < p.vertices; i++)
 			{
-				// Only the round cap at the turn is from the way there.
-				assertTrue(p.d[i] + " at " + p.x[i], p.d[i] >= length - 10 - 0.01);
+				// Only the round cap at the turn is from the way there
+				assertTrue(p.distances[i] + " at " + p.x[i], p.distances[i] >= length - 10 - 0.01);
 			}
 		}
 	}
@@ -399,7 +398,7 @@ public class StrokeMesherTest
 		{
 			StrokeMesher.Mesh plain = build(pts, 40, style, FLAT);
 			StrokeMesher.Mesh rainbow = StrokeMesher.build(pts, 0, pts.size() - 1, 40, style, FLAT, true);
-			// The polygons of the runs do not overlap, so their areas add up to the area of the shape.
+			// Run polygons do not overlap, so areas add up
 			assertEquals(style.toString(), area(plain), area(rainbow), area(plain) * 0.01);
 		}
 	}
@@ -412,15 +411,15 @@ public class StrokeMesherTest
 		{
 			pts.add(new StrokePoint(3200 + i, 3200, 0.5f, 0.5f));
 		}
-		// The part from point 4 starts 4 tiles along the line. The brush last covers its round cap at point 4, as in the
-		// whole stroke.
+		// Part from point 4 starts 4 tiles along; brush covers its round cap at point 4,
+		// as in the whole stroke
 		StrokeMesher.Mesh part = StrokeMesher.build(pts, 4, 8, 10, LineStyle.STRAIGHT, FLAT, true);
 		float min = Float.MAX_VALUE;
 		for (StrokeMesher.Piece p : part.pieces)
 		{
 			for (int i = 0; i < p.vertices; i++)
 			{
-				min = Math.min(min, p.d[i]);
+				min = Math.min(min, p.distances[i]);
 			}
 		}
 		assertEquals(4 * 128, min, 0.1);

@@ -15,7 +15,7 @@ import org.junit.Test;
 
 public class StrokeStorageTest
 {
-	// The same Gson that RuneLite gives the plugin, so Color is written the same way.
+	// Same Gson as RuneLite, so Color is written alike
 	private static final Gson GSON = RuneLiteAPI.GSON;
 	private final StrokeStorage storage = new StrokeStorage(GSON);
 
@@ -41,7 +41,7 @@ public class StrokeStorageTest
 		assertEquals(0, stroke.getPlane());
 		assertNotNull(stroke.getId());
 		assertEquals(List.of(FIRST, LAST), stroke.getPoints());
-		// Strokes without a draw order keep the order of the list.
+		// Strokes without draw order keep list order
 		assertEquals(1, stroke.getOrder());
 		assertEquals(2, loaded.getStrokes().get(1).getOrder());
 	}

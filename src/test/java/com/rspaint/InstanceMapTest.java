@@ -16,11 +16,11 @@ public class InstanceMapTest
 {
 	private static final int BASE_X = 6400;
 	private static final int BASE_Y = 6400;
-	// A template chunk in region 12345 (x 48, y 57): chunk 386, 456.
+	// Region 12345 (x 48, y 57)
 	private static final int TEMPLATE_CHUNK_X = 386;
 	private static final int TEMPLATE_CHUNK_Y = 456;
 
-	/** The chunk data that WorldView.getInstanceTemplateChunks() gives for a template chunk. */
+	// Layout as in getInstanceTemplateChunks
 	private static int chunk(int plane, int chunkX, int chunkY, int rotation)
 	{
 		return plane << 24 | chunkX << 14 | chunkY << 3 | rotation << 1;
@@ -53,7 +53,7 @@ public class InstanceMapTest
 	@Test
 	public void tilesTurnAsWorldPointRotateTurnsThem()
 	{
-		// WorldPoint.rotate with rotation 1 moves local tile (x, y) to (y, 7 - x).
+		// Rotation 1 maps tile (x, y) to (y, 7 - x)
 		StrokePoint turned = InstanceMap.rotate(new StrokePoint(2, 5, 0.25f, 0.75f), 0, 0, 1, 0, 0);
 		assertEquals(new StrokePoint(5, 5, 0.75f, 0.75f), turned);
 		turned = InstanceMap.rotate(new StrokePoint(1, 0, 0.5f, 0.5f), 0, 0, 1, 0, 0);
@@ -81,7 +81,7 @@ public class InstanceMapTest
 			InstanceMap map = new InstanceMap(chunks, BASE_X, BASE_Y);
 			int chunkX = BASE_X + 4 * 8;
 			int chunkY = BASE_Y + 6 * 8;
-			// The first point is on the edge of the chunk, and the last point is in the next chunk.
+			// First point on chunk edge, last in next chunk
 			Stroke stroke = stroke(1, new StrokePoint(chunkX, chunkY, 0f, 0f), new StrokePoint(chunkX + 3, chunkY + 2, 0.5f, 0.25f),
 				new StrokePoint(chunkX + 9, chunkY + 1, 1f, 0.5f));
 
@@ -89,7 +89,7 @@ public class InstanceMapTest
 			assertEquals(stroke.id, template.getId());
 			assertEquals(0, template.getPlane());
 			StrokePoint first = template.getPoints().get(0);
-			// The first point stays in the template chunk, so the stroke is found by it again.
+			// First point stays in template chunk
 			assertEquals(TEMPLATE_CHUNK_X, first.getX() >> 3);
 			assertEquals(TEMPLATE_CHUNK_Y, first.getY() >> 3);
 			assertEquals(12345, map.templateRegion(stroke));
@@ -109,13 +109,13 @@ public class InstanceMapTest
 		Stroke stroke = stroke(0, new StrokePoint(BASE_X + 16 + 1, BASE_Y + 16 + 2, 0.5f, 0.5f));
 		SyncedStroke template = firstMap.toTemplate(stroke);
 
-		// The next instance is at other coordinates, and the chunk is in another place with a quarter turn.
+		// Next instance: chunk moved and turned a quarter
 		int[][][] next = emptyChunks();
 		next[0][7][3] = chunk(0, TEMPLATE_CHUNK_X, TEMPLATE_CHUNK_Y, 1);
 		InstanceMap nextMap = new InstanceMap(next, 8000, 9000);
 		List<InstanceMap.Placement> placements = nextMap.placements(template);
 		assertEquals(1, placements.size());
-		// Local tile (1, 2) turns to (2, 6).
+		// Tile (1, 2) turns to (2, 6)
 		assertEquals(Collections.singletonList(new StrokePoint(8000 + 56 + 2, 9000 + 24 + 6, 0.5f, 0.5f)),
 			nextMap.toInstance(template, placements.get(0)));
 	}
@@ -150,7 +150,7 @@ public class InstanceMapTest
 		Stroke stroke = stroke(0, new StrokePoint(BASE_X + 3, BASE_Y + 3, 0.5f, 0.5f));
 		assertEquals(-1, map.templateRegion(stroke));
 		assertNull(map.toTemplate(stroke));
-		// Outside the scene.
+		// Outside scene
 		assertEquals(-1, map.templateRegion(new StrokePoint(BASE_X - 1, BASE_Y, 0, 0), 0));
 	}
 
@@ -159,7 +159,7 @@ public class InstanceMapTest
 	{
 		int[][][] chunks = emptyChunks();
 		chunks[0][0][0] = chunk(0, TEMPLATE_CHUNK_X, TEMPLATE_CHUNK_Y, 0);
-		// Scene chunk 8 is in the next instance region, because a region is 8 chunks wide.
+		// Chunk 8 is in the next region (8 chunks wide)
 		chunks[2][8][0] = chunk(1, 400, 400, 0);
 		InstanceMap map = new InstanceMap(chunks, BASE_X, BASE_Y);
 		int firstRegion = (BASE_X >> 6) << 8 | BASE_Y >> 6;

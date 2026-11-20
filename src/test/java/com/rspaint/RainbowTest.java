@@ -25,7 +25,7 @@ public class RainbowTest
 	@Test
 	public void nextColorsAreClose()
 	{
-		// No step changes a channel by much, so the steps do not show.
+		// Steps are too small to show
 		for (int i = 0; i < Rainbow.STEPS; i++)
 		{
 			Color a = Rainbow.color(i), b = Rainbow.color(i + 1);
@@ -57,7 +57,7 @@ public class RainbowTest
 			StrokePoint p = new StrokePoint(3200 + i / 3, 3200 + i / 7, (i % 3) / 3f, (i % 7) / 7f);
 			all.add(p);
 			stroke.pts.add(p);
-			// Measure as the points come, as while the player draws.
+			// Measure per point, as while drawing
 			stroke.distances();
 		}
 		float[] expected = Rainbow.distances(all, null, 0);
@@ -66,7 +66,7 @@ public class RainbowTest
 		{
 			assertEquals(expected[i], got[i], 1e-3);
 		}
-		// Simplify makes a new list, so the stroke measures again.
+		// Simplify makes a new list, so remeasure
 		stroke.pts = new ArrayList<>(all.subList(0, 2));
 		assertArrayEquals(new float[]{0, (float) Math.hypot(128 / 3.0, 128 / 7.0)}, java.util.Arrays.copyOf(stroke.distances(), 2), 1e-3f);
 	}

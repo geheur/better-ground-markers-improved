@@ -90,7 +90,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	static class pf extends Point2D.Float { pf(float x, float y) { super(x, y);} }
 	static pf pf(float x, float y) { return new pf(x, y); }
 
-	// Search order around the selected scene tile for the tile under the mouse.
+	// Search order around selected tile
 	private static final int[] TILE_X_OFFSETS = {0, 1, 1, 0, -1, -1, -1, 0, 1,
 		2, 2, 2, 1, 0, -1, -2, -2, -2, -2, -2, -1, 0, 1, 2, 2};
 	private static final int[] TILE_Y_OFFSETS = {0, 0, 1, 1, 1, 0, -1, -1, -1,
@@ -98,20 +98,20 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	static final Color DEFAULT_COLOR = Color.LIGHT_GRAY;
 
-	// Two columns of color slots. The first column starts with the Paint palette.
+	// Two columns of color slots
 	static final int SLOTS_PER_COLUMN = 10;
 	static final int COLOR_SLOTS = SLOTS_PER_COLUMN * 2;
 	static final Color[] DEFAULT_PALETTE = {
-		new Color(0x000000), // black
-		new Color(0xFFFFFF), // white
-		new Color(0x7F7F7F), // gray
-		new Color(0xED1C24), // red
-		new Color(0xFF7F27), // orange
-		new Color(0xFFF200), // yellow
-		new Color(0x22B14C), // green
-		new Color(0x00A2E8), // turquoise
-		new Color(0x3F48CC), // indigo
-		new Color(0xA349A4), // purple
+		new Color(0x000000), // Black
+		new Color(0xFFFFFF), // White
+		new Color(0x7F7F7F), // Gray
+		new Color(0xED1C24), // Red
+		new Color(0xFF7F27), // Orange
+		new Color(0xFFF200), // Yellow
+		new Color(0x22B14C), // Green
+		new Color(0x00A2E8), // Turquoise
+		new Color(0x3F48CC), // Indigo
+		new Color(0xA349A4), // Purple
 	};
 
 	@Inject
@@ -122,16 +122,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		setLayer(OverlayLayer.ABOVE_SCENE);
 	}
 
-//	List<Stroke> strokes = new ArrayList<>();
 	Stroke currentStroke = null;
 
-	// A new point is stored only when it is at least this many screen pixels from the last stored point.
-	// This removes the one-pixel steps of a slow mouse. It is a constant, not a setting,
-	// so that all clients store points with the same rule.
+	// Fixed, so all clients store points alike
 	private static final float MIN_POINT_SPACING_PX = 3f;
 
-	// The newest point that was too near the last stored point. It is stored when the stroke ends,
-	// so the stroke ends where the mouse button was released.
+	// Stored on release, so the stroke ends at the mouse
 	private StrokePoint skippedPoint = null;
 
 	private void addPoint(StrokePoint point)
@@ -141,7 +137,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		skippedPoint = null;
 	}
 
-	/** Starts a new stroke at the point. Does nothing if the region of the point cannot be saved. */
 	private void startStroke(StrokePoint point, int plane)
 	{
 		int region = new WorldPoint(point.getX(), point.getY(), 0).getRegionID();
@@ -149,12 +144,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		int saveRegion = saveRegion(point, plane);
 		if (saveRegion == -1)
 		{
-			// A tile of an instance without a template chunk. A stroke here cannot be saved.
+			// Instance tile without a template chunk
 			return;
 		}
 		if (unreadableRegions.contains(saveRegion))
 		{
-			// The saved strokes of this region stay as they are, so a new stroke here would be lost on the next load.
+			// New stroke would be lost on next load
 			warnUnreadableRegion(saveRegion);
 			return;
 		}
@@ -169,7 +164,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		addPoint(point);
 	}
 
-	// Regions that the player was told about, so the message shows once per region and not on each frame.
 	private final Set<Integer> warnedRegions = new HashSet<>();
 
 	private void warnUnreadableRegion(int region)
@@ -177,7 +171,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		if (warnedRegions.add(region))
 		{
 			client.addChatMessage(ChatMessageType.GAMEMESSAGE, "",
-				"RsPaint cannot read the saved strokes of this area, so you cannot draw here. A newer version of the plugin can have saved them.", null);
+				"RsPaint can't read the saved strokes for this area, so drawing is turned off here.", null);
 		}
 	}
 
@@ -188,12 +182,11 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		{
 			return true;
 		}
-		// Project the last point with the current camera, so the spacing stays correct if the camera moves.
+		// Current camera keeps spacing right
 		pf last = toScreen(client.getTopLevelWorldView(), pts.get(pts.size() - 1));
 		return last == null || last.distanceSq(ground) >= MIN_POINT_SPACING_PX * MIN_POINT_SPACING_PX;
 	}
 
-	/** Ends the current stroke, simplifies it and saves it. */
 	private void finishStroke()
 	{
 		if (currentStroke != null && skippedPoint != null)
@@ -206,14 +199,11 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 		if (currentStroke != null)
 		{
-			// The stroke is complete. Fewer points make saves, full syncs, exports and drawing faster.
 			int oldRegion = currentStroke.primaryRegion();
 			int oldSaveRegion = saveRegion(currentStroke.pts.get(0), currentStroke.plane);
 			List<StrokePoint> rawPts = currentStroke.pts;
 			currentStroke.pts = StrokeCodec.simplify(rawPts);
-			// Simplify rounds the points, so the first point can move onto a tile in the next region, or in an instance
-			// onto the next chunk, which can have another template region.
-			// Strokes are saved and found by their primary region, so the stroke must be in the list of that region.
+			// Rounding can move the first point to another region or template chunk
 			int newRegion = currentStroke.primaryRegion();
 			if (newRegion != oldRegion || saveRegion(currentStroke.pts.get(0), currentStroke.plane) != oldSaveRegion)
 			{
@@ -221,7 +211,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				int newSaveRegion = saveRegion(currentStroke.pts.get(0), currentStroke.plane);
 				if (newSaveRegion == -1 || unreadableRegions.contains(newSaveRegion))
 				{
-					// The next region cannot be saved. Keep the points as drawn, so the stroke stays in its region.
+					// Unsaveable region, keep raw points
 					currentStroke.pts = rawPts;
 					newRegion = oldRegion;
 				}
@@ -241,10 +231,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		skippedPoint = null;
 	}
 
-	// The most changes that undo can go back.
 	private static final int MAX_UNDO = 100;
 
-	/** One draw or one erase drag of the local player. A draw has one stroke. An erase has all strokes that one drag erased. */
+	// One draw, or one erase drag
 	@RequiredArgsConstructor
 	private static class CanvasChange
 	{
@@ -252,10 +241,10 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		final List<Stroke> strokes;
 	}
 
-	// The newest change is first. Client thread only.
+	// Newest first. Client thread only
 	private final Deque<CanvasChange> undoStack = new ArrayDeque<>();
 	private final Deque<CanvasChange> redoStack = new ArrayDeque<>();
-	// The change of the erase drag in progress, so that one drag undoes as one change.
+	// Undone as one change
 	private CanvasChange currentErase = null;
 
 	private void addToHistory(CanvasChange change)
@@ -278,7 +267,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		currentErase.strokes.addAll(erased);
 	}
 
-	/** Undoes the newest draw or erase, and tells party members. Client thread only. */
+	// Client thread only
 	void undo()
 	{
 		CanvasChange change = takeChange(undoStack);
@@ -297,7 +286,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		redoStack.push(change);
 	}
 
-	/** Does the newest undone change again, and tells party members. Client thread only. */
+	// Client thread only
 	void redo()
 	{
 		CanvasChange change = takeChange(redoStack);
@@ -316,14 +305,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		undoStack.push(change);
 	}
 
-	/** Takes the newest change from the stack. Returns null if the stack is empty or a drag is in progress. */
+	// Null if empty or drag in progress
 	private CanvasChange takeChange(Deque<CanvasChange> stack)
 	{
 		if (drawing || erasing)
 		{
 			return null;
 		}
-		// The mouse button can be up before the next frame ends the stroke.
+		// Mouse can be up before the next frame ends the stroke
 		finishStroke();
 		currentErase = null;
 		return stack.poll();
@@ -334,7 +323,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		Set<Integer> changedRegions = new LinkedHashSet<>();
 		for (Stroke stroke : strokes)
 		{
-			// Find the stroke by its id. The region can be loaded again since the change, with new Stroke objects.
+			// By id, region can reload with new objects
 			if (regionStrokes(stroke.primaryRegion()).removeIf(s -> s.id.equals(stroke.id)))
 			{
 				changedRegions.add(stroke.primaryRegion());
@@ -349,7 +338,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		Set<Integer> changedRegions = new LinkedHashSet<>();
 		for (Stroke stroke : strokes)
 		{
-			// The stroke keeps its draw order, so it goes back to the same layer.
 			regionStrokes(stroke.primaryRegion()).add(stroke);
 			changedRegions.add(stroke.primaryRegion());
 		}
@@ -357,7 +345,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		partySync.onStrokesRestored(strokes);
 	}
 
-	/** Returns the screen position of the point with the current camera, or null if its tile is not on the screen. */
+	// Null if off screen
 	private pf toScreen(WorldView worldView, StrokePoint p)
 	{
 		LocalPoint lp = loadedLocalPoint(worldView, p.getX(), p.getY(), worldView.getPlane());
@@ -365,11 +353,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return poly != null ? projectToScreen(p.getSubx(), p.getSuby(), poly) : null;
 	}
 
-	/**
-	 * Returns how many tiles past each edge of the scene the client loaded. The scene edge is the loading line.
-	 * The GPU plugin can load an extended scene: up to 40 more tiles on each side of the top-level scene, where the game
-	 * also draws the ground. Without it, this is 0.
-	 */
+	// GPU plugin extended scene, up to 40 tiles per side of the top-level scene
 	private int extendedBorder(WorldView worldView)
 	{
 		if (!worldView.isTopLevel() || client.getExpandedMapLoading() <= 0)
@@ -379,21 +363,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return (Constants.EXTENDED_SCENE_SIZE - Constants.SCENE_SIZE) / 2;
 	}
 
-	/**
-	 * Returns how many tiles past each edge of the scene the GPU plugin loads, which can be less than extendedBorder.
-	 * The GPU plugin loads getExpandedMapLoading() zones, and a zone is 8 tiles. Use it only for the region range.
-	 * The extended tile array is always laid out with the extendedBorder offset.
-	 */
+	// Tiles the GPU plugin loads, can be less than extendedBorder
+	// Region range only, the tile array uses extendedBorder
 	private int loadedBorder(WorldView worldView)
 	{
 		return Math.min(extendedBorder(worldView), client.getExpandedMapLoading() * Constants.CHUNK_SIZE);
 	}
 
-	/**
-	 * Returns the local point of the center of the world tile, or null if the client did not load the tile.
-	 * Unlike LocalPoint.fromWorld, this also works for the tiles of the extended scene, past the loading line.
-	 * Perspective.getCanvasTilePoly accepts those points.
-	 */
+	// Null if not loaded. Unlike LocalPoint.fromWorld, also covers extended tiles past the loading line
 	private LocalPoint loadedLocalPoint(WorldView worldView, int worldX, int worldY, int plane)
 	{
 		int sceneX = worldX - worldView.getBaseX();
@@ -415,37 +392,31 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			|| extendedX >= extendedTiles[plane].length || extendedY >= extendedTiles[plane][extendedX].length
 			|| extendedTiles[plane][extendedX][extendedY] == null)
 		{
-			// The tile is outside the extended scene, or the client did not load it.
 			return null;
 		}
 		return LocalPoint.fromScene(sceneX, sceneY, worldView);
 	}
 
-	// The stored width of new strokes. See screenWidth for the width on the screen.
 	int strokeSize = Stroke.MIN_WIDTH;
 	List<Color> colors = new ArrayList<>();
-	// True for the color slots that draw rainbows. A rainbow slot has Rainbow.FIRST in colors, so the Draw option shows it.
+	// Rainbow slots hold Rainbow.FIRST in colors
 	boolean[] rainbowSlots = new boolean[0];
 	int selectedColor = 0;
 
-	// If "Scale width with zoom" is on, a stroke has its stored width in screen pixels at this camera scale.
-	// 512 is the scale of the default zoom in fixed mode.
+	// Camera scale where stored width equals screen pixels (fixed mode default zoom)
 	private static final float REFERENCE_SCALE = 512f;
 
-	// Multiplies the stored width of each stroke to get its width on the screen. Set at the start of each frame.
+	// Set each frame
 	private float widthScale = 1f;
 
-	// If false, strokes are drawn fully opaque, also when their color is transparent. Set at the start of each frame.
+	// Set each frame
 	private boolean transparentStrokes = true;
 
-	// The Render distance setting in tiles (0 is no limit), and the scene tile of the camera. Set at the start of each frame.
+	// Render distance in tiles, 0 is no limit. Set each frame
 	private int renderDistance = 0;
 	private int cameraTileX, cameraTileY;
 
-	/**
-	 * Returns true if the world tile is in the render distance. Like the GPU plugin draw distance, the area is a square
-	 * around the tile of the camera.
-	 */
+	// Square around camera tile, like GPU draw distance
 	private boolean isInRenderDistance(WorldView worldView, int worldX, int worldY)
 	{
 		return renderDistance == 0
@@ -453,7 +424,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			&& Math.abs(worldY - worldView.getBaseY() - cameraTileY) <= renderDistance;
 	}
 
-	/** Returns the width on the screen of a stroke with this stored width. It is never less than 1 pixel. */
+	// Minimum 1 pixel
 	private float screenWidth(double width)
 	{
 		return Math.max(1f, (float) width * widthScale);
@@ -465,16 +436,15 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		configManager.setConfiguration(RsPaintConfig.GROUP, "strokeSize", strokeSize);
 	}
 
-	// When the player holds down a stroke size button, the size starts to repeat after HOLD_DELAY_MS.
-	// Each repeat comes sooner than the one before it, until one repeat on each client tick.
+	// Held size button repeats, speeding up to one per client tick
 	private static final long HOLD_DELAY_MS = 400;
 	private static final long HOLD_FIRST_INTERVAL_MS = 80;
 	private static final long HOLD_MIN_INTERVAL_MS = 20;
 
-	// The held stroke size button and when the press started, or -1. Written on the AWT thread.
+	// Written on the AWT thread, -1 if none held
 	private volatile int heldSizeButton = -1;
 	private volatile long heldSince;
-	// Client thread only.
+	// Client thread only
 	private long repeatPressStart;
 	private long nextRepeatAt;
 	private long repeatInterval;
@@ -495,14 +465,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		long pressStart = heldSince;
 		if (pressStart != repeatPressStart)
 		{
-			// A new press. The click itself already changed the size once.
+			// Click already changed size once
 			repeatPressStart = pressStart;
 			nextRepeatAt = pressStart + HOLD_DELAY_MS;
 			repeatInterval = HOLD_FIRST_INTERVAL_MS;
 		}
 
 		long now = System.currentTimeMillis();
-		// The repeat stops while the mouse is off the button, and starts again when it comes back.
+		// Pauses while mouse is off the button
 		if (now < nextRepeatAt || !toolbarButtonClickbox(held).contains(mx, my))
 		{
 			return;
@@ -518,7 +488,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return color != null ? color : DEFAULT_COLOR;
 	}
 
-	/** Returns true if the slot draws rainbows. */
 	private boolean isRainbowSlot(int index)
 	{
 		return index < rainbowSlots.length && rainbowSlots[index] && colors.get(index) != null;
@@ -527,7 +496,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		// The camera scale changes when the player zooms. The ground tiles on the screen get larger and smaller with it.
 		widthScale = config.scaleWidthWithZoom() && client.getScale() > 0 ? client.getScale() / REFERENCE_SCALE : 1f;
 
 		Point mouse = client.getMouseCanvasPosition();
@@ -543,10 +511,10 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			currentErase = null;
 		}
 
-		boolean showUi = eDown || dDown || drawing || erasing;
+		boolean showUi = eraseMode || drawMode || drawing || erasing;
 		boolean overUi = showUi && getMousedOverToolbarButton(mx, my) != -1;
 
-		Tile tile = dDown || drawing ? client.getTopLevelWorldView().getSelectedSceneTile() : null;
+		Tile tile = drawMode || drawing ? client.getTopLevelWorldView().getSelectedSceneTile() : null;
 		pf ground = null;
 
 		if (tile != null)
@@ -588,7 +556,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				if (drawing) {
 					int plane = client.getTopLevelWorldView().getPlane();
 					if (currentStroke != null && currentStroke.plane != plane) {
-						// The player went up or down a floor during the stroke. The rest of the line is a new stroke on the new floor.
+						// Floor changed, new stroke
 						finishStroke();
 					}
 					StrokePoint point = new StrokePoint(tilex, tiley, sub.x, sub.y);
@@ -607,20 +575,19 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 		if (showUi) {
 			if (!overUi) {
-				if (eDown || erasing) {
+				if (eraseMode || erasing) {
 					graphics.setColor(Color.PINK);
 					graphics.draw(new Ellipse2D.Float(mx - 10, my - 10, 20, 20));
-				} else if ((dDown || drawing) && ground != null) {
+				} else if ((drawMode || drawing) && ground != null) {
 					graphics.setColor(brushColor());
 					float size = screenWidth(strokeSize);
 					if (size <= 2) {
 						graphics.drawRect((int) ground.x - 1, (int) ground.y - 1, 2, 2);
 					} else if (sceneStrokes.isActive()) {
-						// Strokes in the world have a width on the ground, so the brush is a circle on the ground.
+						// Ground-width brush circle
 						drawGroundCircle(graphics, cursorTileX, cursorTileY, cursorSub,
 							SceneStrokes.worldWidth(strokeSize, config.scaleWidthWithZoom(), client.getScale()) / 2);
 					} else {
-						// A circle with the size of the brush on the screen.
 						graphics.draw(new Ellipse2D.Float(ground.x - size / 2, ground.y - size / 2, size, size));
 					}
 				}
@@ -647,12 +614,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				super.draw(g, r, mouseOver);
 			}
 			@Override public void addMenuEntries() {
-				// The last entry is on top, so "New color" stays the left-click option.
+				// Last entry is on top, so "New color" stays the left-click option
 				client.getMenu().createMenuEntry(-1).setOption("New rainbow").onClick(me -> addSlotAtStart(Rainbow.FIRST, true));
 				client.getMenu().createMenuEntry(-1).setOption("New color").onClick(me -> pickColor(-1));
 			}
 		});
-		// Reset palette: a circular arrow.
+		// Reset palette
 		buttons.add(new ToolbarButton() {
 			@Override public void draw(Graphics2D g, Rectangle r, boolean mouseOver) {
 				g.setColor(Color.LIGHT_GRAY);
@@ -670,7 +637,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		for (int i = 0; i < COLOR_SLOTS; i++) {
 			buttons.add(new ColorToolbarButton(i));
 		}
-		// Decrease stroke size: a minus sign.
+		// Decrease size
 		buttons.add(new ToolbarButton() {
 			@Override public void draw(Graphics2D g, Rectangle r, boolean mouseOver) {
 				g.setColor(strokeSize > Stroke.MIN_WIDTH ? Color.LIGHT_GRAY : Color.DARK_GRAY);
@@ -682,7 +649,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				client.getMenu().createMenuEntry(-1).setOption("Decrease").setTarget("stroke size").onClick(me -> changeStrokeSize(-1));
 			}
 		});
-		// Increase stroke size: a plus sign.
+		// Increase size
 		buttons.add(new ToolbarButton() {
 			@Override public void draw(Graphics2D g, Rectangle r, boolean mouseOver) {
 				g.setColor(strokeSize < Stroke.MAX_WIDTH ? Color.LIGHT_GRAY : Color.DARK_GRAY);
@@ -695,7 +662,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				client.getMenu().createMenuEntry(-1).setOption("Increase").setTarget("stroke size").onClick(me -> changeStrokeSize(1));
 			}
 		});
-		// The current stroke size, as a number.
+		// Stroke size number
 		buttons.add(new ToolbarButton() {
 			@Override public void draw(Graphics2D g, Rectangle r, boolean mouseOver) {
 				String text = Integer.toString(strokeSize);
@@ -710,10 +677,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		});
 	}
 
-	// The click box of each toolbar button. The layout does not change, so the boxes are made once, not on each frame.
-	// Do not change these rectangles.
+	// Do not change the rectangles
 	private final Rectangle[] clickboxes = layoutClickboxes(buttons.size());
-	// The box that a button draws in. Reused for each button, because a button can change it. Client thread only.
+	// Reused, client thread only
 	private final Rectangle drawBounds = new Rectangle();
 
 	class ToolbarButton {
@@ -733,7 +699,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			Color color = colorIndex < colors.size() ? colors.get(colorIndex) : null;
 			if (colorIndex == selectedColor) r.grow(2, 2);
 			if (isRainbowSlot(colorIndex)) {
-				// One loop of the rainbow, from left to right.
+				// One rainbow loop, left to right
 				for (int x = 0; x < r.width; x++) {
 					g.setColor(Rainbow.color(x * Rainbow.STEPS / r.width));
 					g.fillRect(r.x + x, r.y, 1, r.height);
@@ -753,7 +719,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				client.getMenu().createMenuEntry(1).setOption(ColorUtil.wrapWithColorTag(option, color)).onClick(me -> selectedColor = colorIndex);
 			}
 			client.getMenu().createMenuEntry(1).setOption("Choose ").setTarget("new color").onClick(me -> pickColor(colorIndex));
-			// Index 1 puts the entry under the ones before it.
+			// Index 1 puts the entry below the earlier ones
 			client.getMenu().createMenuEntry(1).setOption("Choose ").setTarget("rainbow").onClick(me -> setSlot(colorIndex, Rainbow.FIRST, true));
 		}
 
@@ -772,12 +738,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 	}
 
-	/** If index is -1, the new color goes in slot 0, the other colors move down one slot, and slot 0 becomes the selected color. */
+	// Index -1 adds a new slot at the start
 	public void pickColor(int index) {
 		Color color = colors.get(index == -1 ? selectedColor : index);
 		SwingUtilities.invokeLater(() ->
 		{
-			// The picker shows the opacity of the color too. Strokes keep the opacity of their color.
+			// The picker also shows opacity, which strokes keep
 			RuneliteColorPicker colorPicker = colorPickerManager.create(client,
 				color != null ? color : Color.WHITE, "Paint color", false);
 			colorPicker.setOnClose(c -> {
@@ -785,21 +751,18 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 					addSlotAtStart(c, false);
 					return;
 				}
-				// A color replaces the rainbow of the slot.
 				setSlot(index, c, false);
 			});
 			colorPicker.setVisible(true);
 		});
 	}
 
-	/** Puts the color or a rainbow in the slot. */
 	private void setSlot(int index, Color color, boolean rainbow) {
 		colors.set(index, color);
 		rainbowSlots[index] = rainbow;
 		saveColors();
 	}
 
-	/** Puts the color or a rainbow in slot 0, moves the other slots down one slot, and selects slot 0. */
 	private void addSlotAtStart(Color color, boolean rainbow) {
 		for (int i = colors.size() - 1; i > 0; i--) {
 			colors.set(i, colors.get(i - 1));
@@ -807,7 +770,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 		colors.set(0, color);
 		rainbowSlots[0] = rainbow;
-		// The slots moved, so the old selected slot now has a different color. Select the new one.
 		selectedColor = 0;
 		saveColors();
 	}
@@ -815,11 +777,11 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	private void saveColors()
 	{
 		configManager.setConfiguration(RsPaintConfig.GROUP, "drawColors", gson.toJson(colors));
-		// The rainbow slots have their own key, so an older version of the plugin still reads the colors.
+		// Own key, so older versions still read colors
 		configManager.setConfiguration(RsPaintConfig.GROUP, "rainbowSlots", gson.toJson(rainbowSlots));
 	}
 
-	/** Returns the color of the brush: the color of the line end of a rainbow stroke in progress, or the selected color. */
+	// Rainbow stroke end color, else selected
 	private Color brushColor()
 	{
 		if (currentStroke != null && currentStroke.rainbow && !currentStroke.pts.isEmpty())
@@ -833,7 +795,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	@Subscribe public void onClientTick(ClientTick e) {
 		partySync.flush(strokesByRegion);
 
-		if (!dDown && !eDown && !drawing && !erasing || client.isMenuOpen()) return;
+		if (!drawMode && !eraseMode && !drawing && !erasing || client.isMenuOpen()) return;
 
 		Point mouse = client.getMouseCanvasPosition();
 		repeatHeldSizeButton(mouse.getX(), mouse.getY());
@@ -843,21 +805,20 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			buttons.get(button).addMenuEntries();
 			return;
 		}
-		if ((dDown || eDown) && Arrays.stream(client.getMenu().getMenuEntries()).anyMatch(entry -> entry.getType() == MenuAction.WALK || entry.getType() == MenuAction.SET_HEADING)) {
-			client.getMenu().createMenuEntry(-1).setOption(dDown ? ColorUtil.wrapWithColorTag("Draw", selectedColor()) : "Erase").setType(MenuAction.CC_OP);
-			drawable = true;
+		if ((drawMode || eraseMode) && Arrays.stream(client.getMenu().getMenuEntries()).anyMatch(entry -> entry.getType() == MenuAction.WALK || entry.getType() == MenuAction.SET_HEADING)) {
+			client.getMenu().createMenuEntry(-1).setOption(drawMode ? ColorUtil.wrapWithColorTag("Draw", selectedColor()) : "Erase").setType(MenuAction.CC_OP);
+			menuAllowsDraw = true;
 		} else {
-			drawable = false;
+			menuAllowsDraw = false;
 		}
 	}
 
-	/** Returns the screen position of a sub-tile position, with sub-pixel precision, in a new pf. */
 	private static pf projectToScreen(float subx, float suby, Polygon poly)
 	{
 		return projectToScreen(subx, suby, poly, pf(0, 0));
 	}
 
-	/** Puts the screen position of a sub-tile position in out, with sub-pixel precision, and returns out. */
+	// Writes into out
 	private static pf projectToScreen(float subx, float suby, Polygon poly, pf out)
 	{
 		int[] xs = poly.xpoints;
@@ -879,7 +840,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	private pf getBarycentre(int mx, int my, int x0, int y0, int x1, int y1, int x2, int y2, int x3, int y3)
 	{
-		// Try the triangle made by corners 0, 1, 3 first, then the one made by corners 1, 2, 3.
+		// Triangle 0, 1, 3 first, then 1, 2, 3
 		float
 			area13p = triangleArea(x1, y1, x3, y3, mx, my),
 			area03p = triangleArea(x0, y0, x3, y3, mx, my),
@@ -902,35 +863,29 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	@Subscribe public void onGameStateChanged(GameStateChanged e) {
 		if (e.getGameState() == GameState.LOADING) {
-			// The ground heights of the new scene are not the same, so the strokes in the world are made again.
+			// Ground heights changed
 			sceneStrokes.sceneChanged();
 		}
-		// The scene base is final only after the scene loads.
+		// Scene base is final only after the scene loads
 		if (e.getGameState() != GameState.LOGGED_IN) return;
 
 		WorldView worldView = client.getTopLevelWorldView();
 		if (worldView != null) loadScene(worldView);
 	}
 
-	// How many regions around the scene and its extended border also load and draw their strokes.
-	// One region lets a stroke that starts just outside the scene still show.
+	// Extra regions around scene and border, for strokes starting just outside
 	private static final int NEARBY_REGIONS = 1;
 
-	// The local player's loaded strokes, by the region of their first point. In an instance, the points and the regions
-	// are in instance coordinates, and the strokes are saved under their template regions (InstanceMap).
+	// By region of first point. In an instance: instance coordinates, saved under template regions
 	Map<Integer, List<Stroke>> strokesByRegion = new HashMap<>();
 
-	// The template chunks of the instance that the player is in, or null outside an instance.
+	// Null outside an instance
 	private InstanceMap instanceMap = null;
-	// In an instance, the saved strokes of each template region of the scene, in template coordinates.
-	// The strokes of an unreadable region are not here.
+	// Template coordinates. Unreadable regions absent
 	private final Map<Integer, List<PartyCanvasSync.SyncedStroke>> templateStrokes = new HashMap<>();
 
-	/**
-	 * Returns the region whose config key the stroke with this first point saves to, or -1 if it cannot be saved.
-	 * Outside an instance, it is the region of the point. In an instance, it is the region of the template tile, as the
-	 * Ground Markers plugin saves its tiles. Then the stroke shows again in each instance that uses the same template.
-	 */
+	// Region of the config key, -1 if unsaveable
+	// In an instance, the template tile region, as Ground Markers saves
 	private int saveRegion(StrokePoint first, int plane)
 	{
 		if (instanceMap != null)
@@ -940,7 +895,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return new WorldPoint(first.getX(), first.getY(), 0).getRegionID();
 	}
 
-	/** Loads the strokes of the scene, and unloads the strokes of all other regions. */
 	private void loadScene(WorldView worldView)
 	{
 		if (worldView.isInstance())
@@ -950,23 +904,18 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 		if (instanceMap != null)
 		{
-			// The player left the instance. Its strokes are saved in template coordinates already.
+			// Left the instance
 			finishStroke();
 			instanceMap = null;
 			templateStrokes.clear();
 			strokesByRegion.clear();
 			unreadableRegions.clear();
 		}
-		// Keep the same regions that drawing reads, so drawing does not read a region from the config again.
+		// Same regions drawing reads, so drawing never hits config
 		loadStrokes(sceneRegions(worldView));
 	}
 
-	/**
-	 * Loads the saved strokes of the template regions of the instance, and puts a copy of each stroke at each place
-	 * in the instance that has its template chunk. If the scene has the same template chunks as before, for example
-	 * after a scene reload in the same instance, the loaded strokes stay, so undo, redo and the party sync keep the same
-	 * Stroke objects.
-	 */
+	// One copy per chunk with that template. Unchanged chunks keep loaded Strokes for undo, redo, party sync
 	private void loadInstance(WorldView worldView)
 	{
 		int[][][] chunks = worldView.getInstanceTemplateChunks();
@@ -974,7 +923,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		int baseY = worldView.getBaseY();
 		if (instanceMap == null || !instanceMap.isSame(chunks, baseX, baseY))
 		{
-			// Save the stroke in progress with the old chunks, before its list goes.
+			// Save stroke in progress before its list goes
 			finishStroke();
 			instanceMap = new InstanceMap(chunks, baseX, baseY);
 			templateStrokes.clear();
@@ -1003,22 +952,19 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			}
 			if (!loaded.isEmpty())
 			{
-				// Party members in the same instance get the strokes at the same instance coordinates.
+				// Party shares instance coordinates
 				partySync.onStrokesRestored(loaded);
 			}
 		}
-		// Each region of the scene has a list, so a save can add copies without changing the keys of the map.
+		// Saves add copies without changing map keys
 		for (int region : sceneRegions(worldView))
 		{
 			strokesByRegion.computeIfAbsent(region, k -> new ArrayList<>());
 		}
 	}
 
-	/**
-	 * Returns a copy of the template stroke at the placement, in instance coordinates. The first copy has the id of the
-	 * template stroke. The other copies have ids made from it and the placement, so a reload of the same instance gives
-	 * them the same ids, and party members do not get them twice.
-	 */
+	// In instance coordinates. First copy keeps the template id, others derive a stable one
+	// so reloads give no party duplicates
 	private Stroke instanceCopy(PartyCanvasSync.SyncedStroke template, InstanceMap.Placement placement, boolean first)
 	{
 		Stroke stroke = PartyCanvasSync.fromSynced(template);
@@ -1030,10 +976,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return stroke;
 	}
 
-	/**
-	 * Reads the saved strokes of the template region, in template coordinates, and keeps them in templateStrokes.
-	 * Returns null if they cannot be read. Then the region is in unreadableRegions, and it is not saved.
-	 */
+	// Null if unreadable, the region is then in unreadableRegions
 	private List<PartyCanvasSync.SyncedStroke> readTemplate(int region)
 	{
 		String key = "strokes_" + region;
@@ -1056,7 +999,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			{
 				if (stroke.getId() == null)
 				{
-					// The copies of a stroke are found by its id when the region saves, so each stroke must have one.
+					// Copies match by id on save
 					stroke = new PartyCanvasSync.SyncedStroke(Stroke.newId(), stroke.getColor(), stroke.getStrokeWidth(),
 						stroke.getOrder(), stroke.getPlane(), stroke.getPoints(), stroke.getRainbow());
 				}
@@ -1072,11 +1015,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return strokes;
 	}
 
-	/**
-	 * Saves the template regions from the strokes of the instance scene. A saved stroke whose template chunk is not in
-	 * the scene stays saved. A saved stroke that lost a copy, because the player erased it in one place, is erased in
-	 * all places. A new stroke is saved, and gets a copy at each other place of its template chunk.
-	 */
+	// Saved stroke that lost a copy is erased everywhere, one with its chunk outside the scene stays
+	// New stroke gets copies at the other places of its chunk
 	private void saveTemplates(Set<Integer> regions)
 	{
 		if (regions.isEmpty())
@@ -1084,7 +1024,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			return;
 		}
 
-		// The strokes of the scene, by the template region of their first point.
+		// By template region of first point
 		Map<Integer, List<Stroke>> shownByRegion = new HashMap<>();
 		for (List<Stroke> strokes : strokesByRegion.values())
 		{
@@ -1136,7 +1076,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 			for (Stroke stroke : shown)
 			{
-				// A stroke that undo or redo puts back can have the id of a saved stroke that is erased now. It is new.
+				// Undo or redo can restore a stroke whose id was erased since, so it counts as new
 				if (stroke.templateId != null && keptIds.contains(stroke.templateId) || erased.contains(stroke))
 				{
 					continue;
@@ -1180,7 +1120,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 	}
 
-	/** Loads the strokes of the regions, and unloads the strokes of all other regions. */
 	void loadStrokes(int[] regions) {
 		Set<Integer> loadedRegions = strokesByRegion.keySet();
 		Set<Integer> keptRegions = new HashSet<>();
@@ -1195,7 +1134,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			strokesByRegion.remove(region);
 		}
 		List<Integer> regionsToLoad = new ArrayList<>(keptRegions);
-		// Keep the regions that are loaded already, so undo, redo and the party sync keep the same Stroke objects.
+		// Same Stroke objects for undo, redo, party sync
 		regionsToLoad.removeAll(loadedRegions);
 		for (Integer region : regionsToLoad)
 		{
@@ -1203,19 +1142,17 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 	}
 
-	/** Returns the strokes of the region. If the region is not loaded, loads it from the config first. */
 	List<Stroke> regionStrokes(int regionId) {
 		return strokesByRegion.computeIfAbsent(regionId, this::readStrokes);
 	}
 
-	// Regions whose saved strokes cannot be read, for example because a newer version of the plugin saved them.
-	// These regions are not saved, so the saved strokes stay for the version that can read them.
+	// Unreadable saves, e.g. from a newer version. Never saved, so they stay readable there
 	private final Set<Integer> unreadableRegions = new HashSet<>();
 
 	private List<Stroke> readStrokes(int regionId) {
 		if (instanceMap != null)
 		{
-			// The config keys of instance regions are not used. loadInstance loads the strokes of the template regions.
+			// Instance region keys unused, loadInstance loads templates
 			return new ArrayList<>();
 		}
 		String key = "strokes_" + regionId;
@@ -1248,21 +1185,17 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 		if (!strokes.isEmpty())
 		{
-			// Party members get the strokes of the area that the player is in. They already have the other strokes,
-			// so only the strokes of this region go out.
+			// Party has the other strokes already
 			partySync.onStrokesRestored(strokes);
 		}
 		return strokes;
 	}
 
-	// The old text of each config key that is being backed up now, so a region that loads again does not back up twice.
+	// Avoids backing up twice on region reload
 	private final Map<String, String> backupsInProgress = new HashMap<>();
 
-	/**
-	 * Saves the old text to a backup file, then saves the strokes again in the current format, so the old format is
-	 * read only once. The file is written on a background thread. If the file cannot be written, the old text stays
-	 * saved until the player changes the strokes of the region, and the next load tries the backup again.
-	 */
+	// Backs up old text in the background, then saves in the current format
+	// On write failure the old text stays and the next load retries
 	private void migrate(String key, StrokeStorage.Loaded loaded, String oldText)
 	{
 		if (oldText.equals(backupsInProgress.get(key)))
@@ -1279,7 +1212,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				log.warn("Cannot save a backup of {}, so it stays in the old format", key, error);
 				return;
 			}
-			// A new save, or a profile change, can replace the old text first. Do not save over that text.
+			// Do not overwrite a newer save or profile change
 			if (oldText.equals(configManager.getConfiguration(RsPaintConfig.GROUP, key)))
 			{
 				configManager.setConfiguration(RsPaintConfig.GROUP, key, newText);
@@ -1290,7 +1223,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	void saveStrokes(int regionId) {
 		if (instanceMap != null)
 		{
-			// The strokes of the instance region save to the template regions of its chunks.
+			// Save to template regions of its chunks
 			saveTemplates(instanceMap.templateRegionsIn(regionId));
 			return;
 		}
@@ -1307,15 +1240,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		configManager.setConfiguration(RsPaintConfig.GROUP, "strokes_" + regionId, storage.write(synced));
 	}
 
-	/**
-	 * Deletes the local player's strokes in the loaded regions, the area around the player, and tells party members.
-	 * Strokes in other regions stay saved.
-	 */
+	// Loaded regions only, other regions stay saved
 	public void clearCanvas()
 	{
 		currentStroke = null;
 		skippedPoint = null;
-		// A copy of the entries, because a save in an instance can add the list of a region.
+		// Copy, instance saves can add a region list
 		for (Map.Entry<Integer, List<Stroke>> entry : new ArrayList<>(strokesByRegion.entrySet()))
 		{
 			if (!entry.getValue().isEmpty())
@@ -1324,14 +1254,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				saveStrokes(entry.getKey());
 			}
 		}
-		// A reset cannot be undone, so the history goes too.
+		// A reset cannot be undone
 		undoStack.clear();
 		redoStack.clear();
 		currentErase = null;
 		partySync.onCanvasCleared();
 	}
 
-	/** Returns a copy of the local player's loaded strokes. Client thread only. */
+	// Client thread only
 	List<PartyCanvasSync.SyncedStroke> ownStrokes()
 	{
 		List<PartyCanvasSync.SyncedStroke> result = new ArrayList<>();
@@ -1348,10 +1278,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return result;
 	}
 
-	/**
-	 * Adds the strokes to the local player's canvas with new ids, saves them, and sends them to the party. Client thread only.
-	 * The strokes draw over all existing strokes, in the order of the list.
-	 */
+	// New ids, over existing strokes in list order. Client thread only
 	void importStrokes(List<PartyCanvasSync.SyncedStroke> strokes)
 	{
 		Set<Integer> changedRegions = new LinkedHashSet<>();
@@ -1386,16 +1313,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			return;
 		}
 
-		// Turn on antialiasing and transparency only for the strokes, and restore the old state, so the toolbar stays sharp.
+		// Toolbar stays sharp, so restore after
 		Object oldAntialiasing = graphics.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
 		Object oldStrokeControl = graphics.getRenderingHint(RenderingHints.KEY_STROKE_CONTROL);
 		java.awt.Stroke oldStroke = graphics.getStroke();
 		Composite oldComposite = graphics.getComposite();
 		try
 		{
-			// Each stroke is one path that is drawn one time, so the parts of a stroke that cross do not get darker.
-			// Each new stroke is drawn over the older strokes, so the colors of different strokes mix.
-			// This is true for the opacity of the stroke color and for the opacity of all strokes.
+			// One path per stroke, so crossings do not darken
 			renderDistance = Math.max(0, config.renderDistance());
 			cameraTileX = (int) Math.floor(client.getCameraFpX() / Perspective.LOCAL_TILE_SIZE);
 			cameraTileY = (int) Math.floor(client.getCameraFpY() / Perspective.LOCAL_TILE_SIZE);
@@ -1408,7 +1333,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			if (config.antialiasing())
 			{
 				graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-				// Keep the float positions. The default moves line ends to pixel centers.
+				// Default snaps line ends to pixel centers
 				graphics.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
 			}
 			else
@@ -1432,21 +1357,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 	}
 
-	// The ids of the regions in the scene, and the scene base, size and extended border they are for.
-	// Made again only when the scene moves or the border changes, so drawing does not make a new array on each frame.
+	// Rebuilt only when scene base, size or border change
 	private int[] sceneRegions = new int[0];
 	private int sceneRegionsBaseX, sceneRegionsBaseY, sceneRegionsSizeX, sceneRegionsSizeY, sceneRegionsBorder;
 
-	/**
-	 * Returns the ids of all regions that have tiles in the scene, and of the NEARBY_REGIONS regions
-	 * around them. Do not change the array.
-	 * A stroke is stored under the region of the world tile of its first point. The nearby regions let a stroke that
-	 * starts outside the scene and goes into it still show. Its points outside the scene do not draw.
-	 * Inside an instance, the region of a stroke is a region of the instance
-	 * coordinates, but getMapRegions() gives the template regions. So the ids come from the scene base and size.
-	 * Outside an instance, they are the same regions as getMapRegions() gives.
-	 * loadStrokes keeps these regions in memory when the scene loads.
-	 */
+	// Region ids of scene tiles plus NEARBY_REGIONS. Do not change the array
+	// Instance stroke regions are in instance coordinates but getMapRegions() gives templates, so ids come from base and size
 	private int[] sceneRegions(WorldView worldView)
 	{
 		int baseX = worldView.getBaseX();
@@ -1454,7 +1370,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		int sizeX = worldView.getSizeX();
 		int sizeY = worldView.getSizeY();
 		int margin = NEARBY_REGIONS;
-		// Strokes also draw on the extended scene past the loading line, so its regions are in the list too.
+		// Extended scene regions too
 		int border = loadedBorder(worldView);
 		if (baseX == sceneRegionsBaseX && baseY == sceneRegionsBaseY && sizeX == sceneRegionsSizeX && sizeY == sceneRegionsSizeY
 			&& border == sceneRegionsBorder)
@@ -1472,7 +1388,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			sceneRegions = new int[0];
 			return sceneRegions;
 		}
-		// The same formula as WorldPoint.getRegionID(). A region is 64 by 64 tiles, and a region x or y is 0 to 255.
+		// Same formula as WorldPoint.getRegionID(). A region is 64 by 64 tiles, x and y 0 to 255
 		int minRegionX = Math.max(0, ((baseX - border) >> 6) - margin);
 		int maxRegionX = Math.min(0xFF, ((baseX + sizeX + border - 1) >> 6) + margin);
 		int minRegionY = Math.max(0, ((baseY - border) >> 6) - margin);
@@ -1490,10 +1406,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return regions;
 	}
 
-	// The strokes to draw in this frame. Reused, so drawing does not make a new list on each frame.
+	// Reused
 	private final List<Stroke> visibleStrokes = new ArrayList<>();
-	// A frame draws at most this many points. If the shown strokes have more, the oldest strokes do not draw.
-	// Each party member keeps at most 100,000 points, but a big party can have more in all. This keeps the frame time bounded.
+	// Oldest strokes drop first. Members keep 100,000 points each, but a big party can pass this
 	private static final int MAX_DRAWN_POINTS = 200_000;
 
 	private void drawStrokes(Graphics2D graphics, WorldView worldView, int[] regions, int mx, int my, LineStyle style)
@@ -1508,7 +1423,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		{
 			for (Stroke s : visibleStrokes)
 			{
-				// The renderer draws the strokes in the world. Only their parts past it are drawn here.
+				// Renderer draws world strokes, only parts past it draw here
 				if (!sceneStrokes.drewWhole(s))
 				{
 					drawStroke(graphics, worldView, s, style, sceneStrokes.drew(s));
@@ -1521,11 +1436,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 	}
 
-	/**
-	 * Puts the strokes that show into out, in draw order. These are the strokes of all players on the floor of the player,
-	 * from the oldest to the newest, so that a new stroke is on top. If they have more than MAX_DRAWN_POINTS points,
-	 * the oldest strokes are left out.
-	 */
+	// Oldest first, so new strokes are on top. Over MAX_DRAWN_POINTS the oldest drop
 	private void collectStrokes(WorldView worldView, int[] regions, List<Stroke> out)
 	{
 		int plane = worldView.getPlane();
@@ -1541,9 +1452,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 		partySync.forEachVisibleStroke(regions, plane, out::add);
 
-		// The strokes are mostly in order already, so the sort is fast.
 		out.sort(Stroke.DRAW_ORDER);
-		// Count from the newest stroke back, so that the newest strokes draw if there are too many points.
+		// Count from newest
 		int first = out.size();
 		int points = 0;
 		while (first > 0 && points + out.get(first - 1).pts.size() <= MAX_DRAWN_POINTS)
@@ -1554,10 +1464,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		out.subList(0, first).clear();
 	}
 
-	// The strokes for the renderer in this frame. Reused, so it does not make a new list on each frame.
+	// Reused
 	private final List<Stroke> worldStrokes = new ArrayList<>();
 
-	/** Puts the strokes in the world before the scene draws, if Draw in the world is on. */
 	@Subscribe public void onBeforeRender(BeforeRender e)
 	{
 		WorldView worldView = client.getTopLevelWorldView();
@@ -1580,15 +1489,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 	}
 
-	// The tile and the place in the tile of the mouse, while the player draws. Set in render.
+	// Set in render
 	private int cursorTileX, cursorTileY;
 	private pf cursorSub = pf(0, 0);
 
-	// Points around the brush circle on the ground.
 	private static final int CIRCLE_POINTS = 32;
 	private final Path2D.Float circle = new Path2D.Float();
 
-	/** Draws a circle with the radius in world units around the place in the world tile, on the ground. */
+	// Radius in world units
 	private void drawGroundCircle(Graphics2D graphics, int tileX, int tileY, pf sub, double radius)
 	{
 		WorldView worldView = client.getTopLevelWorldView();
@@ -1625,10 +1533,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		graphics.draw(circle);
 	}
 
-	/** Removes and saves the local player's shown strokes that are near the point, and tells party members. */
 	private void eraseOwnStrokes(WorldView worldView, int[] regions, pf eraseAt, LineStyle style)
 	{
-		// Strokes on other floors do not show, so the eraser does not touch them.
+		// Eraser skips other floors
 		int plane = worldView.getPlane();
 		for (int region : regions)
 		{
@@ -1672,17 +1579,16 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return basicStroke;
 	}
 
-	// Reused for each stroke, so drawing does not make new objects on each frame.
+	// Reused
 	private final Path2D.Float path = new Path2D.Float();
-	// The screen position of one point in buildPath. Reused for each point.
 	private final pf projected = pf(0, 0);
-	// The screen positions of a run: points in a row that are all on the screen.
+	// Run: consecutive on-screen points
 	private float[] runX = new float[64];
 	private float[] runY = new float[64];
-	// How far along the line each point of the run is, in world units. Only for a rainbow stroke.
-	private float[] runD = new float[64];
+	// Rainbow only, world units
+	private float[] runDistances = new float[64];
 	private int runLength = 0;
-	// While a rainbow stroke draws, the graphics to draw it on. endRun then draws each run with its colors, not into path.
+	// Rainbow only, endRun draws into this, not path
 	private Graphics2D rainbowTo = null;
 
 	private void addToRun(float x, float y, float distance)
@@ -1691,15 +1597,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		{
 			runX = Arrays.copyOf(runX, runLength * 2);
 			runY = Arrays.copyOf(runY, runLength * 2);
-			runD = Arrays.copyOf(runD, runLength * 2);
+			runDistances = Arrays.copyOf(runDistances, runLength * 2);
 		}
 		runX[runLength] = x;
 		runY[runLength] = y;
-		runD[runLength] = distance;
+		runDistances[runLength] = distance;
 		runLength++;
 	}
 
-	/** Adds the run to the path with the line style, then empties the run. */
 	private void endRun(LineStyle style)
 	{
 		int n = runLength;
@@ -1720,7 +1625,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		path.moveTo(x[0], y[0]);
 		if (n == 1)
 		{
-			// A very short line with round caps draws a dot with the width of the stroke.
+			// A very short round-capped line draws a dot
 			path.lineTo(x[0] + 0.01f, y[0]);
 		}
 		else if (n == 2 || style == LineStyle.STRAIGHT)
@@ -1732,7 +1637,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 		else if (style == LineStyle.SMOOTH)
 		{
-			// Each point is the control point of a quadratic curve between the midpoints of its two segments.
+			// Quadratic curves between segment midpoints
 			path.lineTo((x[0] + x[1]) / 2, (y[0] + y[1]) / 2);
 			for (int i = 1; i < n - 1; i++)
 			{
@@ -1742,7 +1647,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 		else
 		{
-			// A Catmull-Rom spline, as cubic Bezier curves. The first and last points are used again as their own neighbors.
+			// Catmull-Rom spline as cubic Beziers. End points repeat as their own neighbors
 			for (int i = 0; i < n - 1; i++)
 			{
 				int prev = Math.max(i - 1, 0);
@@ -1755,13 +1660,11 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 	}
 
-	/** Draws the stroke. If skipCovered is true, the points on tiles that the renderer draws in the world do not draw. */
 	private void drawStroke(Graphics2D graphics, WorldView worldView, Stroke s, LineStyle style, boolean skipCovered)
 	{
 		graphics.setStroke(basicStroke(screenWidth(s.strokeWidth)));
 		if (s.rainbow)
 		{
-			// Each run draws in endRun, with the colors along the line.
 			rainbowTo = graphics;
 			try
 			{
@@ -1778,26 +1681,23 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		graphics.draw(path);
 	}
 
-	// A rainbow line on the screen is cut into straight pieces of at most this many pixels, so curves stay round.
+	// Max piece length, keeps curves round
 	private static final float RAINBOW_PIECE_PX = 3;
-	// The rainbow step of the line that is in rainbowPath, or -1 if it is empty. The path draws when the step changes.
+	// -1 if empty. Path draws when step changes
 	private int rainbowStep = -1;
 	private final Path2D.Float rainbowPath = new Path2D.Float();
 	private float rainbowLastX, rainbowLastY;
 
-	/**
-	 * Draws the run in rainbowTo with the colors along the line. The curves are the curves of endRun. Each curve between
-	 * two points has the distances of its ends, and the color changes along it.
-	 */
+	// Draws the run in rainbowTo with the endRun curves, color changing between end distances
 	private void drawRainbowRun(LineStyle style, int n)
 	{
 		float[] x = runX;
 		float[] y = runY;
-		float[] d = runD;
+		float[] d = runDistances;
 		rainbowStep = -1;
 		if (n == 1)
 		{
-			// A very short line with round caps draws a dot with the width of the stroke.
+			// A very short round-capped line draws a dot
 			rainbowLine(x[0], y[0], x[0] + 0.01f, y[0], d[0], d[0]);
 		}
 		else if (n == 2 || style == LineStyle.STRAIGHT)
@@ -1809,13 +1709,13 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		}
 		else if (style == LineStyle.SMOOTH)
 		{
-			// A curve from the middle of a segment to the middle of the next has the distances of those middles.
+			// Midpoint distances
 			rainbowLine(x[0], y[0], (x[0] + x[1]) / 2, (y[0] + y[1]) / 2, d[0], (d[0] + d[1]) / 2);
 			for (int i = 1; i < n - 1; i++)
 			{
 				float x0 = (x[i - 1] + x[i]) / 2, y0 = (y[i - 1] + y[i]) / 2;
 				float x1 = (x[i] + x[i + 1]) / 2, y1 = (y[i] + y[i + 1]) / 2;
-				// The quadratic curve as a cubic curve.
+				// Quadratic as cubic
 				rainbowCurve(x0, y0, x0 + (x[i] - x0) * 2 / 3, y0 + (y[i] - y0) * 2 / 3,
 					x1 + (x[i] - x1) * 2 / 3, y1 + (y[i] - y1) * 2 / 3, x1, y1,
 					(d[i - 1] + d[i]) / 2, (d[i] + d[i + 1]) / 2);
@@ -1842,10 +1742,10 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		rainbowCurve(x0, y0, x0 + (x1 - x0) / 3, y0 + (y1 - y0) / 3, x1 - (x1 - x0) / 3, y1 - (y1 - y0) / 3, x1, y1, d0, d1);
 	}
 
-	/** Adds the cubic curve to the rainbow line, in short pieces. Each piece has the color of the distance at its middle. */
+	// Short pieces, colored by distance at the middle
 	private void rainbowCurve(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3, float d0, float d1)
 	{
-		// The control polygon is at least as long as the curve.
+		// Control polygon is at least as long as the curve
 		double length = Math.hypot(x1 - x0, y1 - y0) + Math.hypot(x2 - x1, y2 - y1) + Math.hypot(x3 - x2, y3 - y2);
 		double steps = Math.abs(d1 - d0) / Rainbow.LOOP * Rainbow.STEPS;
 		int pieces = (int) Math.min(1024, Math.max(1, Math.ceil(Math.max(length / RAINBOW_PIECE_PX, steps))));
@@ -1862,7 +1762,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			int step = Rainbow.step(d0 + (d1 - d0) * (j - 0.5) / pieces);
 			if (step != rainbowStep)
 			{
-				// A new color: draw the line so far, and go on from its end.
+				// New color, flush and continue
 				flushRainbow();
 				rainbowStep = step;
 				rainbowPath.moveTo(rainbowLastX, rainbowLastY);
@@ -1884,17 +1784,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		rainbowStep = -1;
 	}
 
-	/**
-	 * Puts the stroke with the current camera in path. If eraseAt is not null, returns true when the stroke is near that point.
-	 * If skipCovered is true, the points on tiles that the renderer draws in the world are left out.
-	 */
+	// True if near eraseAt, when set. skipCovered leaves out tiles the renderer draws in the world
 	private boolean buildPath(WorldView worldView, Stroke s, pf eraseAt, LineStyle style, boolean skipCovered)
 	{
 		boolean hit = false;
 		path.reset();
 		runLength = 0;
 
-		// Consecutive points are often on the same tile, so project each tile once.
+		// Project each tile once
 		int tileX = Integer.MIN_VALUE, tileY = Integer.MIN_VALUE;
 		Polygon poly = null;
 		float[] distances = rainbowTo != null ? s.distances() : null;
@@ -1913,15 +1810,13 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 			if (poly == null)
 			{
-				// The tile is not in the scene, not in the render distance or not on the screen, so the line breaks here.
-				// Without the break, a stroke that leaves the scene and comes back is joined across the gap.
+				// Ends the run, or a re-entering stroke would join across the gap
 				endRun(style);
 				continue;
 			}
 			pf screen = projectToScreen(p.getSubx(), p.getSuby(), poly, projected);
-			// The eraser has a radius of 10 pixels, so it hits a wide stroke at its edge.
-			// The first point of a run has no line before it, so the test uses the point alone.
-			// Thus the eraser also hits a stroke that is one dot.
+			// Radius 10 px, hits a wide stroke at its edge
+			// First run point has no line before it, so test the point alone (one-dot strokes)
 			if (eraseAt != null && !hit)
 			{
 				float fromX = runLength > 0 ? runX[runLength - 1] : screen.x;
@@ -1934,20 +1829,19 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return hit;
 	}
 
-	/** Returns the box that button i draws in. It is the same rectangle for each button, so use it before the next call. */
+	// Shared rectangle, use before the next call
 	private Rectangle toolbarButtonVisibleBounds(int i) {
 		drawBounds.setBounds(clickboxes[i]);
 		drawBounds.grow(-1, -1);
 		return drawBounds;
 	}
 
-	// "New color" and "Reset palette" make the top row. The color slots go below them.
-	// Under the color slots, "Decrease" and "Increase" stroke size make one row, and the size number is under them.
+	// New color, Reset palette, color slots, Decrease, Increase, then the size number
 	private static final int TOP_ROW_BUTTONS = 2;
 	private static final int SIZE_BUTTONS_START = TOP_ROW_BUTTONS + COLOR_SLOTS;
 	private static final int SIZE_ROW = SLOTS_PER_COLUMN + 1;
 
-	/** Returns the click box of button i. Do not change the rectangle. */
+	// Do not change the rectangle
 	private Rectangle toolbarButtonClickbox(int i) {
 		return clickboxes[i];
 	}
@@ -1972,7 +1866,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			column = i - SIZE_BUTTONS_START;
 			row = SIZE_ROW;
 		} else {
-			// The size number is as wide as the two buttons above it.
+			// Size number spans both buttons above
 			return new Rectangle(2, 40 + 20 * (SIZE_ROW + 1), 36, 16);
 		}
 		return new Rectangle(2 + 20 * column, 40 + 20 * row, 16, 16);
@@ -1988,51 +1882,51 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return -1;
 	}
 
-	boolean dDown = false; // draw keybind is held, or draw mode is on if toggleModes is on.
-	boolean drawing = false; // mouse is down and drawing.
-	boolean eDown = false; // erase keybind is held, or erase mode is on if toggleModes is on.
-	boolean erasing = false; // mouse is down and erasing.
-	boolean drawable = false; // last menu entries contained WALK, or SET_HEADING while the player steers a boat.
+	boolean drawMode = false;
+	boolean drawing = false;
+	boolean eraseMode = false;
+	boolean erasing = false;
+	boolean menuAllowsDraw = false;
 
-	// The draw and erase keys are down. Key repeat sends more presses, so toggleModes toggles only on the first one.
+	// Key repeat resends presses, so toggleModes toggles on the first
 	private boolean drawKeyHeld = false;
 	private boolean eraseKeyHeld = false;
-	// Undo or redo consumed a key press, so its typed character must not reach the game either.
+	// Also consume the typed character
 	private boolean consumeTyped = false;
 
-	/** True if the toolbar is on the screen. This is the same test that render() uses. */
+	// Same test as render
 	private boolean isToolbarShown()
 	{
-		return eDown || dDown || drawing || erasing;
+		return eraseMode || drawMode || drawing || erasing;
 	}
 
-	int toolbarButtonBeingDraggedIndex = -1;
+	int draggedButtonIndex = -1;
 
 	@Override
 	public MouseEvent mousePressed(MouseEvent e)
 	{
 		if (e.getButton() != MouseEvent.BUTTON1) return e;
 
-		// A press on an open menu picks a menu entry. It does not start a drag.
-		toolbarButtonBeingDraggedIndex = -1;
+		// A press on an open menu picks an entry, not a drag
+		draggedButtonIndex = -1;
 		if (client.isMenuOpen()) return e;
 
-		// The hidden toolbar takes no clicks.
+		// Hidden toolbar takes no clicks
 		if (isToolbarShown()) {
-			toolbarButtonBeingDraggedIndex = getMousedOverToolbarButton(e.getX(), e.getY());
+			draggedButtonIndex = getMousedOverToolbarButton(e.getX(), e.getY());
 		}
-		if (toolbarButtonBeingDraggedIndex != -1) {
-			if (isSizeButton(toolbarButtonBeingDraggedIndex)) {
-				// Write the time first. The client thread reads the button first, then the time.
+		if (draggedButtonIndex != -1) {
+			if (isSizeButton(draggedButtonIndex)) {
+				// Time first, the client thread reads button then time
 				heldSince = System.currentTimeMillis();
-				heldSizeButton = toolbarButtonBeingDraggedIndex;
+				heldSizeButton = draggedButtonIndex;
 			}
 			return e;
 		}
 
-		if (drawable) {
-			if (dDown) drawing = true;
-			else if (eDown) erasing = true;
+		if (menuAllowsDraw) {
+			if (drawMode) drawing = true;
+			else if (eraseMode) erasing = true;
 		}
 
 		return e;
@@ -2043,14 +1937,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	{
 		if (e.getButton() != MouseEvent.BUTTON1) return e;
 
-		// A release on an open menu or on the hidden toolbar does not drop on a button.
+		// A release on an open menu or hidden toolbar drops on no button
 		int i = !client.isMenuOpen() && isToolbarShown() ? getMousedOverToolbarButton(e.getX(), e.getY()) : -1;
-		if (i != -1 && toolbarButtonBeingDraggedIndex != -1) {
-			buttons.get(i).onDrag(buttons.get(toolbarButtonBeingDraggedIndex));
+		if (i != -1 && draggedButtonIndex != -1) {
+			buttons.get(i).onDrag(buttons.get(draggedButtonIndex));
 		}
 
-		// Always end the drag and the held size button, also if a menu opened during the press.
-		toolbarButtonBeingDraggedIndex = -1;
+		// Always end drag, even if a menu opened
+		draggedButtonIndex = -1;
 		drawing = false;
 		erasing = false;
 		heldSizeButton = -1;
@@ -2061,15 +1955,15 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	public void keyPressed(KeyEvent e)
 	{
 		if (config.drawKeybind().matches(e)) {
-			if (!config.toggleModes()) dDown = true;
-			else if (!drawKeyHeld) setMode(!dDown, false);
+			if (!config.toggleModes()) drawMode = true;
+			else if (!drawKeyHeld) setMode(!drawMode, false);
 			drawKeyHeld = true;
 		} else if (config.eraseKeybind().matches(e)) {
-			if (!config.toggleModes()) eDown = true;
-			else if (!eraseKeyHeld) setMode(false, !eDown);
+			if (!config.toggleModes()) eraseMode = true;
+			else if (!eraseKeyHeld) setMode(false, !eraseMode);
 			eraseKeyHeld = true;
-		} else if (dDown || eDown) {
-			// Undo and redo work only in draw mode or erase mode. In other modes the keys go to the game.
+		} else if (drawMode || eraseMode) {
+			// Undo and redo only in draw or erase mode, else the keys go to the game
 			if (config.undoKeybind().matches(e)) {
 				e.consume();
 				consumeTyped = true;
@@ -2087,30 +1981,30 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	{
 		if (config.drawKeybind().matches(e)) {
 			drawKeyHeld = false;
-			if (!config.toggleModes()) dDown = false;
+			if (!config.toggleModes()) drawMode = false;
 		} else if (config.eraseKeybind().matches(e)) {
 			eraseKeyHeld = false;
-			if (!config.toggleModes()) eDown = false;
+			if (!config.toggleModes()) eraseMode = false;
 		}
-		// Some keys, for example F5 or the arrow keys, make no typed character. If the flag stays on,
-		// keyTyped eats the next character that the player types. The typed character comes before the release.
+		// Keys like F5 or arrows type nothing, so a stale flag would eat the next character
+		// Typed character comes before the release
 		consumeTyped = false;
 	}
 
 	private void setMode(boolean draw, boolean erase)
 	{
-		dDown = draw;
-		eDown = erase;
+		drawMode = draw;
+		eraseMode = erase;
 		drawing = false;
 		erasing = false;
 	}
 
 	@Subscribe public void onFocusChanged(FocusChanged e) {
 		if (!e.isFocused()) {
-			// The keys and the mouse button can be released outside the client.
+			// Keys and mouse button can be released outside the client
 			if (!config.toggleModes()) {
-				dDown = false;
-				eDown = false;
+				drawMode = false;
+				eraseMode = false;
 			}
 			drawKeyHeld = false;
 			eraseKeyHeld = false;
@@ -2122,7 +2016,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	}
 
 	@Override public void keyTyped(KeyEvent e) {
-		// Most key presses also make a typed character. It must not reach the game either.
+		// Typed character must not reach the game
 		if (consumeTyped) {
 			consumeTyped = false;
 			e.consume();
@@ -2155,7 +2049,6 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		rainbowSlots = loadRainbowSlots(colors.size());
 	}
 
-	/** Returns which slots draw rainbows, as saved. */
 	private boolean[] loadRainbowSlots(int slots) {
 		boolean[] loaded = new boolean[slots];
 		String configuration = configManager.getConfiguration(RsPaintConfig.GROUP, "rainbowSlots");
@@ -2170,15 +2063,11 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return loaded;
 	}
 
-	/** Frees the loaded strokes and the history while the plugin is off. */
 	public void shutDown() {
 		clientThread.invokeLater(this::resetCanvas);
 	}
 
-	/**
-	 * Forgets the loaded strokes and the history. The overlay is a singleton, so without this the strokes of the old
-	 * profile or the last session stay loaded, and the next save writes them over the saved strokes.
-	 */
+	// Singleton, so old profile or session strokes would be saved over the stored ones
 	private void resetCanvas() {
 		strokesByRegion.clear();
 		instanceMap = null;
@@ -2194,9 +2083,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	@Subscribe public void onProfileChanged(ProfileChanged e) {
 		clientThread.invoke(() -> {
-			// The new profile has its own strokes, colors and stroke size.
+			// New profile has own strokes, colors, size
 			startUp();
-			// Party members still have the strokes of the old profile.
+			// Party members still have the old profile strokes
 			partySync.onCanvasCleared();
 			WorldView worldView = client.getTopLevelWorldView();
 			if (client.getGameState() == GameState.LOGGED_IN && worldView != null) {
@@ -2214,7 +2103,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		saveColors();
 	}
 
-	/** True if the saved palette is the old one-color default, so the player never chose a color. */
+	// Saved palette is the old one-color default, so no color was chosen
 	private static boolean isOldDefaultPalette(List<Color> saved) {
 		for (int i = 0; i < saved.size(); i++) {
 			Color color = saved.get(i);
@@ -2227,7 +2116,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	static float triangleArea(int x1, int y1, int x2, int y2, int x3, int y3)
 	{
-		// Divide as a float. An integer division drops the half-pixel areas.
+		// Float division keeps the half-pixel areas
 		return Math.abs((x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2)) / 2f);
 	}
 }

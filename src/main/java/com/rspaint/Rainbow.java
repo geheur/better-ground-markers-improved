@@ -4,23 +4,18 @@ import com.rspaint.RsPaintPlugin.StrokePoint;
 import java.awt.Color;
 import java.util.List;
 
-/**
- * The colors of a rainbow stroke. The color of a place on the stroke comes from how far along the line it is, in world
- * units, so the color changes only where the line goes, and a still mouse adds no colors. The colors loop through
- * the hues, from red at the start of the stroke.
- */
 final class Rainbow
 {
-	/** How far along the line one loop of all hues goes, in world units. 128 world units are one tile. */
+	// 128 units per tile
 	static final double LOOP = 8 * 128;
 
-	/** The colors in one loop. More steps than the 64 hues of the game, so the colors do not show steps. */
+	// More than the 64 game hues, avoids banding
 	static final int STEPS = 192;
 
-	/** The stored color of a rainbow stroke: the first color. Old versions of the plugin draw the stroke in this color. */
+	// Stored color, old versions draw it as is
 	static final Color FIRST = new Color(0xFF0000);
 
-	// The hues that the loop goes through. Between two of them, one channel goes up or down, so all colors are full hues.
+	// Neighbors differ by one channel
 	private static final int[] HUES = {0xFF0000, 0xFFFF00, 0x00FF00, 0x00FFFF, 0x0000FF, 0xFF00FF};
 
 	private static final Color[] COLORS = new Color[STEPS];
@@ -49,28 +44,22 @@ final class Rainbow
 		return (int) Math.round(from + (to - from) * mix);
 	}
 
-	/** Returns the step of the place that is this far along the line, from 0 to STEPS - 1. */
 	static int step(double distance)
 	{
 		return Math.floorMod((int) Math.floor(distance / LOOP * STEPS), STEPS);
 	}
 
-	/** Returns the color of the step. */
 	static Color color(int step)
 	{
 		return COLORS[Math.floorMod(step, STEPS)];
 	}
 
-	/** Returns the color of the place that is this far along the line. */
 	static Color colorAt(double distance)
 	{
 		return COLORS[step(distance)];
 	}
 
-	/**
-	 * Returns how far along the line each point is, in world units, with the points joined by straight lines.
-	 * The overlay and the renderer use the same distances, so a stroke has the same colors in both.
-	 */
+	// Distance along the line to each point, world units
 	static float[] distances(List<StrokePoint> pts, float[] reuse, int known)
 	{
 		int n = pts.size();

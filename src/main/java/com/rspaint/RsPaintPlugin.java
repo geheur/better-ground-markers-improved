@@ -46,7 +46,7 @@ public class RsPaintPlugin extends Plugin
 
 	private NavigationButton navigationButton;
 
-	/** Returns the data folder of the plugin, .runelite/plugin-data/rspaint. Do not call it on the client thread. */
+	// Disk access, not for the client thread
 	Filepath dataDirectory() throws IOException
 	{
 		return getPluginDirectory();
@@ -86,7 +86,7 @@ public class RsPaintPlugin extends Plugin
 		eventBus.unregister(bgmiOverlay);
 		bgmiOverlay.shutDown();
 
-		// The strokes in the world are scene objects, which only the client thread can take out of the scene.
+		// Scene objects go on the client thread
 		eventBus.unregister(sceneStrokes);
 		sceneStrokes.shutDown();
 		clientThread.invokeLater(sceneStrokes::clearAll);
@@ -94,7 +94,7 @@ public class RsPaintPlugin extends Plugin
 		eventBus.unregister(partySync);
 		partySync.shutDown();
 
-		// All members show again on the next start, so the panel must rebuild its switches.
+		// Members show again on next start
 		eventBus.unregister(panel);
 		panel.reset();
 		clientToolbar.removeNavigation(navigationButton);
@@ -107,11 +107,10 @@ public class RsPaintPlugin extends Plugin
 	}
 
 	static class Stroke {
-		// The stored width is in screen pixels. If "Scale width with zoom" is on, the overlay changes it with the zoom.
+		// Screen pixels
 		static final int MIN_WIDTH = 1;
 		static final int MAX_WIDTH = 100;
 
-		/** Returns the width, or 1 if the width is not a number from MIN_WIDTH to MAX_WIDTH. */
 		static double validWidth(double width)
 		{
 			return width >= MIN_WIDTH && width <= MAX_WIDTH ? width : 1;
@@ -122,40 +121,32 @@ public class RsPaintPlugin extends Plugin
 			return plane >= 0 && plane < Constants.MAX_Z;
 		}
 
-		/** From the stroke that draws first, at the bottom, to the stroke that draws last, on top. */
 		static final Comparator<Stroke> DRAW_ORDER = Comparator.comparingLong((Stroke s) -> s.order).thenComparing(s -> s.id);
 
-		// A random 63-bit number in base 36. It is shorter than a UUID, and only one member's strokes must not collide.
-		// Strokes saved before ids existed get a new id when they load.
+		// Old strokes get an id on load
 		String id = newId();
-		// In an instance, the id of the saved template stroke that this stroke is a copy of (InstanceMap), or null if
-		// the stroke is not saved yet. A template chunk can show in more than one place, so copies can share it.
+		// Instance copy of a saved template stroke (InstanceMap), shared across places
 		transient String templateId;
 		List<StrokePoint> pts = new ArrayList<>();
 		Color color;
 		double strokeWidth;
-		// The draw order from StrokeClock. It is 0 for strokes saved before the draw order existed.
+		// From StrokeClock, 0 for old strokes
 		long order;
-		// The plane (floor) that the stroke was drawn on. The stroke shows only while the player is on this plane.
-		// Strokes saved before the plane existed load on plane 0.
+		// Old strokes load on plane 0
 		int plane;
-		// True if the color goes through the hues along the line (Rainbow). The color is then Rainbow.FIRST.
+		// Color is Rainbow.FIRST
 		boolean rainbow;
-		// How far along the line each point is (Rainbow.distances), for the first distancesKnown points of distancesFor.
+		// Rainbow.distances cache for first distancesKnown points of distancesFor
 		private transient float[] distances;
 		private transient List<StrokePoint> distancesFor;
 		private transient int distancesKnown;
-		// The color without its opacity. Made when first needed, so drawing does not make a new Color on each frame.
-		// Transient, so it is not saved with the stroke.
 		private transient Color opaqueColor;
 
-		/** Returns a new random stroke id. */
 		static String newId()
 		{
 			return Long.toString(ThreadLocalRandom.current().nextLong() & Long.MAX_VALUE, Character.MAX_RADIX);
 		}
 
-		/** Returns the color with full opacity. The color of a stroke does not change after the stroke is made. */
 		Color opaqueColor()
 		{
 			if (opaqueColor == null)
@@ -165,15 +156,12 @@ public class RsPaintPlugin extends Plugin
 			return opaqueColor;
 		}
 
-		/**
-		 * Returns how far along the line each point is, in world units. Only new points are measured, so a stroke that
-		 * the player draws is not measured again on each frame. Client thread only.
-		 */
+		// Client thread only
 		float[] distances()
 		{
 			if (distancesFor != pts || distancesKnown > pts.size())
 			{
-				// Simplify made a new list.
+				// Simplify replaced the list
 				distancesFor = pts;
 				distancesKnown = 0;
 			}
@@ -191,35 +179,22 @@ public class RsPaintPlugin extends Plugin
 		}
 	}
 
-	/**
-	 * Gives each stroke a draw order. A stroke with a higher order draws over a stroke with a lower order.
-	 *
-	 * <p>The order of a new stroke is the current time in milliseconds, but always higher than the order of
-	 * all strokes that this client already has. Thus a new stroke draws over all strokes that the player can see,
-	 * also when the clocks of party members are not the same. Party members send the order with each stroke,
-	 * so all clients draw the strokes in the same order.
-	 *
-	 * <p>Client thread only.
-	 */
+	// Draw order is time in ms, bumped above all known orders for skewed party clocks. Client thread only
 	@Singleton
 	static class StrokeClock
 	{
-		// Larger orders are not accepted from party members, so a bad value cannot make the clock overflow.
+		// Larger orders from party are rejected
 		private static final long MAX_ORDER = 1L << 53;
 
 		private long last = 0;
 
-		/** Returns the order for a new stroke. */
 		long next()
 		{
 			last = Math.max(last + 1, System.currentTimeMillis());
 			return last;
 		}
 
-		/**
-		 * Returns the order to use for a stroke from a party member, and moves the clock past it.
-		 * If the order is not valid, for example because the member has an old version of the plugin, returns a new order.
-		 */
+		// Invalid orders (old plugin versions) get a new one
 		long receive(long order)
 		{
 			if (order <= 0 || order >= MAX_ORDER)
@@ -230,11 +205,7 @@ public class RsPaintPlugin extends Plugin
 			return order;
 		}
 
-		/**
-		 * Moves the clock past the order of a saved stroke, so new strokes draw over it. A saved order can be in the future,
-		 * for example because a party member with a fast clock moved the clock forward in an earlier session.
-		 * Orders that are not valid do not change the clock, and the stroke keeps its order.
-		 */
+		// Saved order can be in the future from a fast party clock
 		void advancePast(long order)
 		{
 			if (order > 0 && order < MAX_ORDER)

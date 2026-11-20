@@ -15,59 +15,38 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
-/**
- * Turns a stroke into flat convex polygons that lie on the ground, so the renderer can draw the stroke as part of the
- * game world.
- *
- * <p>The stroke outline is made in world units: the line through the points, with the width of the stroke, round caps
- * and round joins. The outline is the union of that shape, so where the stroke crosses itself, the polygons do not
- * overlap and a transparent stroke does not get darker. Each polygon lies in one triangle of one ground tile and has the
- * height of that triangle, so the stroke follows the ground on slopes.
- *
- * <p>The polygons of each zone (8 by 8 tiles) are kept together. The renderer draws each zone as its own models.
- */
+// Flat convex ground polygons per zone. Outline is a union, so transparent strokes stay even
 final class StrokeMesher
 {
 	static final int TILE = 128;
 	static final int ZONE_TILES = 8;
 	static final int ZONE = TILE * ZONE_TILES;
-	/**
-	 * The polygons of a rainbow stroke are cut into squares of this size, so they have vertices close together. Each vertex
-	 * has its own color, and the renderer blends the colors over each face, so the colors change smoothly.
-	 */
+	// Small cells keep vertex colors smooth
 	static final int RAINBOW_CELL = TILE / 4;
 
 	private StrokeMesher()
 	{
 	}
 
-	/** The ground heights. */
 	interface Ground
 	{
-		/**
-		 * Writes the heights of the corners of the world tile into out as {southwest, southeast, northeast, northwest}.
-		 * Returns false if the tile is not loaded. A larger height is lower, as in the game.
-		 */
+		// Heights {sw, se, ne, nw} into out, false if not loaded. Larger is lower
 		boolean corners(int worldX, int worldY, int[] out);
 	}
 
-	/** The polygons of one stroke in one zone. Vertex x and y are world units from the southwest corner of the zone. */
+	// Vertex x and y are world units from the zone's southwest corner
 	static final class Piece
 	{
 		private static final AtomicLong NEXT_ID = new AtomicLong();
 
-		/** A new id for each piece, so the renderer sees when the piece of a zone changes. */
 		final long id = NEXT_ID.getAndIncrement();
-		/** The world zone: the world tile divided by ZONE_TILES. */
 		final int zoneX, zoneY;
 		float[] x = new float[32], y = new float[32], z = new float[32];
-		/** For a rainbow stroke, how far along the line each vertex is (Rainbow.distances). Else null. */
-		float[] d;
+		// Rainbow strokes only, else null
+		float[] distances;
 		int vertices;
-		/** The vertex count of each polygon. The vertices of the polygons follow each other. */
 		int[] sizes = new int[8];
 		int polygons;
-		/** The triangles of all polygons: each polygon of n vertices is n - 2 triangles. */
 		int faces;
 
 		Piece(int zoneX, int zoneY)
@@ -84,9 +63,9 @@ final class StrokeMesher
 				x = Arrays.copyOf(x, size);
 				y = Arrays.copyOf(y, size);
 				z = Arrays.copyOf(z, size);
-				if (d != null)
+				if (distances != null)
 				{
-					d = Arrays.copyOf(d, size);
+					distances = Arrays.copyOf(distances, size);
 				}
 			}
 			for (int i = 0; i < n; i++)
@@ -94,9 +73,9 @@ final class StrokeMesher
 				x[vertices + i] = (float) (px[i] + offsetX);
 				y[vertices + i] = (float) (py[i] + offsetY);
 				z[vertices + i] = (float) pz[i];
-				if (d != null)
+				if (distances != null)
 				{
-					d[vertices + i] = pd[i];
+					distances[vertices + i] = pd[i];
 				}
 			}
 			vertices += n;
@@ -109,11 +88,9 @@ final class StrokeMesher
 		}
 	}
 
-	/** The polygons of a stroke, by zone. */
 	static final class Mesh
 	{
 		final List<Piece> pieces;
-		/** The box around the stroke outline in world units. */
 		final double minX, minY, maxX, maxY;
 
 		Mesh(List<Piece> pieces, double minX, double minY, double maxX, double maxY)
@@ -131,28 +108,20 @@ final class StrokeMesher
 		}
 	}
 
-	/**
-	 * Returns the polygons of the part of the stroke from point from to point to, with the width in world units, or null
-	 * if there are no points. The line style connects the points as on the screen, but in world units. The parts
-	 * [0, k], [k, 2k], ... of a stroke join without a gap, and their curves are the curves of the whole stroke.
-	 */
+	// Null if empty. Parts [0, k], [k, 2k], ... join without a gap
 	static Mesh build(List<StrokePoint> pts, int from, int to, double width, LineStyle style, Ground ground)
 	{
 		return build(pts, from, to, width, style, ground, false);
 	}
 
-	/**
-	 * As the other build. For a rainbow stroke, the polygons are cut into RAINBOW_CELL squares, and each vertex gets how far
-	 * along the line it is (Piece.d): where the brush was when it last covered the vertex (Centerline.distanceAt). Where
-	 * the stroke crosses itself, the later pass covers the earlier one (buildRainbow).
-	 */
+	// Rainbow cuts RAINBOW_CELL squares, later passes cover earlier ones
 	static Mesh build(List<StrokePoint> pts, int from, int to, double width, LineStyle style, Ground ground, boolean rainbow)
 	{
 		if (pts.isEmpty() || from < 0 || to >= pts.size() || from > to || !(width > 0))
 		{
 			return null;
 		}
-		// All coordinates are world units from the southwest corner of the tile of the first point, so doubles stay exact.
+		// Relative to first point's tile, keeps doubles exact
 		long originX = (long) pts.get(from).getX() * TILE;
 		long originY = (long) pts.get(from).getY() * TILE;
 		if (rainbow)
@@ -167,11 +136,7 @@ final class StrokeMesher
 			originX + bounds.getMaxX(), originY + bounds.getMaxY());
 	}
 
-	/**
-	 * A rainbow stroke is cut into runs where it comes back over itself. Each run keeps only the ground that no later
-	 * run covers, so where the stroke crosses itself, the later pass shows on top with a sharp edge, as a newer stroke
-	 * does. A run does not cross itself, so it needs no cut inside, and a stroke that does not cross itself is one run.
-	 */
+	// Runs split at self-crossings, each keeps only ground no later run covers
 	private static Mesh buildRainbow(List<StrokePoint> pts, int from, int to, double width, LineStyle style, Ground ground,
 		long originX, long originY)
 	{
@@ -202,9 +167,7 @@ final class StrokeMesher
 			maxY = Math.max(maxY, boxes[k].getMaxY());
 		}
 
-		// The ground that the later runs show on, in blocks. Each block has the parts of the later runs that show and
-		// whose boxes touch the block. A place that a later run covers is in a block that both boxes touch, so a run
-		// needs only the blocks that its box touches. Without blocks, the area of all later runs gets large.
+		// Blocks of visible later runs, one big area is too slow
 		double block = Math.max(4 * TILE, 2 * width);
 		Map<Long, Area> shown = new HashMap<>();
 		Slabs slabs = new Slabs(ground, originX, originY, RAINBOW_CELL);
@@ -229,7 +192,6 @@ final class StrokeMesher
 			{
 				continue;
 			}
-			// The later runs and this one cover the same ground as the later runs and the part of this one that shows.
 			for (int bx = bx0; bx <= bx1; bx++)
 			{
 				for (int by = by0; by <= by1; by++)
@@ -238,9 +200,7 @@ final class StrokeMesher
 				}
 			}
 			int[] run = runs.get(k);
-			// The ends of the part also look at the points next to it, so the parts of a stroke join with the colors of the
-			// whole stroke. Inside the part, a run looks only at its own points: where the stroke turns back over itself,
-			// the earlier pass must not give its colors to the later one.
+			// Part ends use neighbor points to join colors, inside only own points
 			int first = run[0] == from ? Math.max(0, from - 1) : run[0];
 			int last = run[1] == to ? end : run[1];
 			slabs.line = new Centerline(pts, first, last, width, originX, originY, all);
@@ -253,11 +213,7 @@ final class StrokeMesher
 		return new Mesh(slabs.order, originX + minX, originY + minY, originX + maxX, originY + maxY);
 	}
 
-	/**
-	 * Cuts the points from to to into runs, as {first point, last point}. A run ends before a segment that comes within
-	 * the width of a place on the run that is at least the width back along the line, so a run does not cross itself.
-	 * px and py are the points from point from, and all has the distances along the line.
-	 */
+	// Run ends before a segment within width of a place at least width back along the line
 	static List<int[]> runs(double[] px, double[] py, float[] all, int from, int to, double width)
 	{
 		List<int[]> runs = new ArrayList<>();
@@ -266,15 +222,14 @@ final class StrokeMesher
 			runs.add(new int[]{from, to});
 			return runs;
 		}
-		// The segments are checked in pieces of half the width, so the two sides of a sharp turn are far apart along
-		// the line, also when each side is one long segment.
+		// Half-width pieces, so sharp turns still read as far apart along the line
 		double step = Math.max(width / 2, 4);
 		double cell = Math.max(width, 8);
 		double widthSq = width * width;
-		// The pieces of the run: x0, y0, x1, y1, and the distances along the line at their ends.
+		// x0, y0, x1, y1, d0, d1 per piece
 		double[] pieces = new double[64 * 6];
 		int pieceCount = 0;
-		// The pieces of the run, by the grid squares that their boxes touch.
+		// Piece indexes per grid square
 		Map<Long, int[]> grid = new HashMap<>();
 		double[] made = new double[6];
 		int start = from;
@@ -349,7 +304,7 @@ final class StrokeMesher
 		return runs;
 	}
 
-	/** Writes the piece of the segment from t0 to t1 into out as x0, y0, x1, y1, and the distances at its ends. */
+	// Segment part t0 to t1 into out as x0, y0, x1, y1, d0, d1
 	private static void piece(double x, double y, double sx, double sy, float d0, float d1, double t0, double t1, double[] out)
 	{
 		out[0] = x + sx * t0;
@@ -360,7 +315,6 @@ final class StrokeMesher
 		out[5] = d0 + (d1 - d0) * t1;
 	}
 
-	/** The square of the shortest distance between the segments (ax, ay)-(bx, by) and (cx, cy)-(dx, dy). */
 	static double segmentDistanceSq(double ax, double ay, double bx, double by, double cx, double cy, double dx, double dy)
 	{
 		double d1 = cross(ax, ay, bx, by, cx, cy), d2 = cross(ax, ay, bx, by, dx, dy);
@@ -387,23 +341,17 @@ final class StrokeMesher
 		return dx * dx + dy * dy;
 	}
 
-	/**
-	 * How far a flattened curve can be from the curve, in world units. A round cap gets about 20 straight lines, and very
-	 * wide strokes get a little fewer.
-	 */
+	// About 20 lines per round cap, fewer when wide
 	static double flatness(double width)
 	{
 		return Math.max(0.25, Math.min(1.5, width * 0.005));
 	}
 
-	/**
-	 * The part of the stroke as a filled shape: the line with the width, round caps and round joins. Can overlap itself.
-	 * The curves are the curves of BGMIOverlay.endRun, so the line style looks the same.
-	 */
+	// May overlap itself. Curves match BGMIOverlay.endRun
 	static Shape outline(List<StrokePoint> pts, int from, int to, double width, LineStyle style, long originX, long originY)
 	{
 		int n = pts.size();
-		// The neighbors of the part are in the curves too.
+		// Neighbors shape curves
 		int first = Math.max(0, from - 1);
 		int last = Math.min(n - 1, to + 2);
 		double[] x = new double[last - first + 1];
@@ -425,7 +373,7 @@ final class StrokeMesher
 		int b = to - first;
 		if (dot)
 		{
-			// A very short line with round caps is a dot with the width of the stroke.
+			// Dot
 			path.moveTo(x[a], y[a]);
 			path.lineTo(x[a] + 0.01, y[a]);
 		}
@@ -439,8 +387,7 @@ final class StrokeMesher
 		}
 		else if (style == LineStyle.SMOOTH)
 		{
-			// Curve j goes from the middle of points j - 1 and j to the middle of points j and j + 1, with point j as its
-			// control point. A part has the curves after its first point up to its last point.
+			// Curve j: midpoint(j - 1, j) to midpoint(j, j + 1), control j
 			if (from == 0)
 			{
 				path.moveTo(x[a], y[a]);
@@ -462,7 +409,7 @@ final class StrokeMesher
 		}
 		else
 		{
-			// Catmull-Rom curves: the first and last points of the stroke are used again as their own neighbors.
+			// Catmull-Rom, ends repeat as own neighbors
 			path.moveTo(x[a], y[a]);
 			for (int j = from; j < to; j++)
 			{
@@ -478,7 +425,7 @@ final class StrokeMesher
 		return new BasicStroke((float) width, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND).createStrokedShape(path);
 	}
 
-	/** The shape with its curves as straight lines. Area works much faster with straight lines only. */
+	// Area is much faster with straight lines
 	static Path2D flatten(Shape shape, double flatness)
 	{
 		Path2D.Double flat = new Path2D.Double(Path2D.WIND_NON_ZERO);
@@ -486,25 +433,17 @@ final class StrokeMesher
 		return flat;
 	}
 
-	/** The line through the points of a part of a stroke, for the distances along the line of a rainbow stroke. */
 	static final class Centerline
 	{
-		// The segments near each square of BUCKET units, so a vertex looks only at the segments near it.
 		private static final int BUCKET = TILE;
 
-		// The points of the line, in the coordinates of build, with their distances.
 		private final double[] x, y;
 		private final float[] d;
 		private final int count;
-		// The square of half the width: the brush.
 		private final double radiusSq;
-		// For each square: the count of segments, then the segments.
+		// Per square: count, then segment indexes
 		private final Map<Long, int[]> buckets = new HashMap<>();
 
-		/**
-		 * The line through the points from first to last. all has the distances of the points (Rainbow.distances), at
-		 * least up to last.
-		 */
 		Centerline(List<StrokePoint> pts, int first, int last, double width, long originX, long originY, float[] all)
 		{
 			count = last - first + 1;
@@ -519,7 +458,7 @@ final class StrokeMesher
 				y[i] = (long) p.getY() * TILE - originY + p.getSuby() * TILE;
 				d[i] = all[first + i];
 			}
-			// A vertex is at most half the width from the curve, and the curve can bend away from the straight segments.
+			// Curves bend away from straight segments
 			double reach = width / 2 + TILE;
 			for (int i = 0; i + 1 < count; i++)
 			{
@@ -548,12 +487,7 @@ final class StrokeMesher
 			}
 		}
 
-		/**
-		 * Returns how far along the line the brush was when it last covered the point: the largest distance of a place on
-		 * the line that is at most half the width from the point. That is the color that a round brush leaves when it
-		 * paints along the line, as the overlay draws it. Where a curve bends away from the straight segments, a point
-		 * can be further than half the width from all of them, and gets the place on the line nearest to it.
-		 */
+		// Largest distance along the line within half width, matches overlay. Nearest place if no segment reaches
 		float distanceAt(double px, double py)
 		{
 			if (count == 1)
@@ -562,7 +496,7 @@ final class StrokeMesher
 			}
 			long key = (long) (int) Math.floor(px / BUCKET) << 32 | ((int) Math.floor(py / BUCKET) & 0xFFFFFFFFL);
 			int[] list = buckets.get(key);
-			// Without a list, all segments.
+			// No list: all segments
 			int n = list != null ? list[0] : count - 1;
 			double nearestSq = Double.MAX_VALUE;
 			float nearest = d[0];
@@ -573,7 +507,6 @@ final class StrokeMesher
 				double sx = x[i + 1] - x[i], sy = y[i + 1] - y[i];
 				double length = Math.sqrt(sx * sx + sy * sy);
 				double ox = px - x[i], oy = py - y[i];
-				// Along the segment from its start, and the square of the distance from the segment's line.
 				double along = length > 0 ? (ox * sx + oy * sy) / length : 0;
 				double offSq = Math.max(0, ox * ox + oy * oy - along * along);
 				double clamped = Math.max(0, Math.min(length, along));
@@ -585,7 +518,6 @@ final class StrokeMesher
 				}
 				if (offSq <= radiusSq)
 				{
-					// The brush covers the point from along - reach to along + reach on the segment.
 					double reach = Math.sqrt(radiusSq - offSq);
 					if (along - reach <= length && along + reach >= 0)
 					{
@@ -600,39 +532,34 @@ final class StrokeMesher
 			return Float.isNaN(last) ? nearest : last;
 		}
 
-		/** The distance of the place that is at on segment i, which is length long. */
 		private float place(int i, double at, double length)
 		{
 			return length > 0 ? (float) (d[i] + (d[i + 1] - d[i]) * at / length) : d[i];
 		}
 	}
 
-	/**
-	 * Cuts an area into horizontal slabs, the slabs into tiles, and the tiles into their two ground triangles.
-	 * The area must not overlap itself, as an Area does not.
-	 */
+	// Area to horizontal slabs, tiles, then ground triangles
 	private static final class Slabs
 	{
 		private static final double EPSILON = 1e-7;
 
 		private final Ground ground;
 		private final long originX, originY;
-		// The size of the squares that the polygons are cut into: TILE, or RAINBOW_CELL for a rainbow stroke.
 		private final int cell;
-		// The line of a rainbow stroke, for the distance of each vertex. Else null. A rainbow stroke sets it for each run.
+		// Rainbow only, set per run, else null
 		Centerline line;
 		private final long originTileX, originTileY;
 		private final Map<Long, Piece> pieces = new HashMap<>();
-		// The pieces of all calls of cut, one for each zone.
+		// One per zone, across cut calls
 		final List<Piece> order = new ArrayList<>();
 
-		// The edges, each {x at its low y, low y, x at its high y, high y}.
+		// Edges: {x at low y, low y, x at high y, high y}
 		private double[] edges = new double[64];
 		private int edgeCount;
 
-		// Scratch for the polygons that clip makes.
+		// Clip scratch
 		private double[] ax = new double[16], ay = new double[16], bx = new double[16], by = new double[16];
-		// The polygon before the cut along the diagonal of a tile.
+		// Polygon before diagonal cut
 		private double[] keepX = new double[16], keepY = new double[16];
 		private double[] pz = new double[16];
 		private float[] pd = new float[16];
@@ -648,7 +575,7 @@ final class StrokeMesher
 			originTileY = originY / TILE;
 		}
 
-		/** Adds the polygons of the area to the pieces. The areas of more calls must not overlap. */
+		// Areas across calls must not overlap
 		List<Piece> cut(Area area)
 		{
 			edgeCount = 0;
@@ -657,7 +584,6 @@ final class StrokeMesher
 			{
 				return order;
 			}
-			// The edges by their low y, so the sweep adds them in order.
 			Integer[] byLow = new Integer[edgeCount];
 			for (int i = 0; i < edgeCount; i++)
 			{
@@ -671,9 +597,8 @@ final class StrokeMesher
 			double[] xa = new double[edgeCount];
 			double[] xb = new double[edgeCount];
 			Integer[] sorted = new Integer[edgeCount];
-			// A slab line from a vertex goes across the whole area, so the trapezoids between the same two edges in
-			// slabs that follow each other are one trapezoid. Without this, a stroke that winds over many rows has
-			// as many trapezoids as vertices times crossings. Per left edge: its right edge (or -1), from and to y.
+			// Merges trapezoids between the same two edges across slabs, else winding strokes explode in count
+			// Per left edge: right edge (or -1), from y, to y
 			openRight = new int[edgeCount];
 			Arrays.fill(openRight, -1);
 			openFrom = new double[edgeCount];
@@ -687,10 +612,9 @@ final class StrokeMesher
 				double y1 = ys[s + 1];
 				if (y0 == Math.floor(y0 / cell) * cell)
 				{
-					// A row line: the trapezoids must not go into the next row.
+					// Trapezoids must not cross rows
 					closeAll();
 				}
-				// Edges end at slab lines, because all their end points are slab lines.
 				int kept = 0;
 				for (int i = 0; i < activeCount; i++)
 				{
@@ -719,9 +643,9 @@ final class StrokeMesher
 					xb[i] = xAt(e, y1);
 					sorted[i] = i;
 				}
-				// Edges do not cross inside a slab, so the order in the middle is the order of the whole slab.
+				// Edges do not cross inside a slab
 				Arrays.sort(sorted, 0, activeCount, (a, b) -> Double.compare(xa[a] + xb[a], xa[b] + xb[b]));
-				// Inside and outside change at each edge.
+				// Inside flips at each edge
 				slab++;
 				for (int i = 0; i + 1 < activeCount; i += 2)
 				{
@@ -743,7 +667,7 @@ final class StrokeMesher
 					openTo[l] = y1;
 					seen[l] = slab;
 				}
-				// The trapezoids that did not go on into this slab end.
+				// Close trapezoids that ended
 				int stillOpen = 0;
 				for (int i = 0; i < openCount; i++)
 				{
@@ -768,7 +692,7 @@ final class StrokeMesher
 		private double[] openFrom, openTo;
 		private int openCount, slab;
 
-		/** Cuts the open trapezoid of the left edge into tiles. It stays open, so the caller must reopen or forget it. */
+		// Stays open, caller must reopen or forget it
 		private void close(int l)
 		{
 			int r = openRight[l];
@@ -793,7 +717,7 @@ final class StrokeMesher
 			return x0 + (x1 - x0) * (y - y0) / (y1 - y0);
 		}
 
-		/** Reads the edges of the area and returns the sorted slab lines: each vertex y and each tile row line between. */
+		// Returns sorted slab lines: vertex ys and cell rows
 		private double[] readEdges(Area area)
 		{
 			double[] ys = new double[64];
@@ -833,7 +757,7 @@ final class StrokeMesher
 			{
 				return new double[0];
 			}
-			// The slabs also stop at each row of cells, so each slab is in one row of tiles.
+			// Cell rows, so each slab is in one row
 			for (double row = Math.ceil(minY / cell) * cell; row < maxY; row += cell)
 			{
 				if (yCount == ys.length)
@@ -859,7 +783,6 @@ final class StrokeMesher
 		{
 			if (y0 == y1)
 			{
-				// A flat edge bounds no slab.
 				return;
 			}
 			if ((edgeCount + 1) * 4 > edges.length)
@@ -883,10 +806,6 @@ final class StrokeMesher
 			}
 		}
 
-		/**
-		 * Cuts the trapezoid with the corners (x00, y0), (x01, y0), (x11, y1), (x10, y1) into the cells of its row.
-		 * The trapezoid is in one row of cells, so it is in one row of tiles.
-		 */
 		private void trapezoid(double x00, double x01, double x11, double x10, double y0, double y1)
 		{
 			int row = (int) Math.floor((y0 + y1) / 2 / TILE);
@@ -894,7 +813,7 @@ final class StrokeMesher
 			int last = (int) Math.floor(Math.max(x01, x11) / cell);
 			for (int column = first; column <= last; column++)
 			{
-				// The tile column of the cell column. With cells of one tile, they are the same.
+				// Equals column when cells are tiles
 				int tileColumn = Math.floorDiv(column * cell, TILE);
 				int worldX = (int) (originTileX + tileColumn);
 				int worldY = (int) (originTileY + row);
@@ -904,10 +823,10 @@ final class StrokeMesher
 				}
 				int sw = corners[0], se = corners[1], ne = corners[2], nw = corners[3];
 				int end = column;
-				// Only whole tiles join. A rainbow stroke keeps its small cells.
+				// Rainbow keeps small cells
 				if (cell == TILE && sw == se && se == ne && ne == nw)
 				{
-					// Flat tiles next to each other in the same zone take one polygon.
+					// Adjacent flat tiles in a zone share a polygon
 					while (end < last && Math.floorMod(worldX + (end - column), ZONE_TILES) != ZONE_TILES - 1
 						&& ground.corners(worldX + (end - column) + 1, worldY, other)
 						&& other[0] == sw && other[1] == sw && other[2] == sw && other[3] == sw)
@@ -915,7 +834,7 @@ final class StrokeMesher
 						end++;
 					}
 				}
-				// The part of the trapezoid in the cells from column to end.
+				// Clip to cells column..end
 				int n = quad(x00, x01, x11, x10, y0, y1);
 				n = clip(n, 1, 0, (end + 1) * (double) cell);
 				n = clip(n, -1, 0, -column * (double) cell);
@@ -923,12 +842,12 @@ final class StrokeMesher
 				double tileY = row * (double) TILE;
 				if (sw + ne == se + nw)
 				{
-					// The tile is one plane, so its two triangles need no cut.
+					// One plane
 					emit(n, worldX, worldY, tileX, tileY, sw, se, ne, nw, true);
 				}
 				else
 				{
-					// The game draws a tile as two triangles, with the line from the southeast corner to the northwest corner.
+					// Game splits tiles along the southeast-northwest line
 					int saved = n;
 					if (keepX.length < saved)
 					{
@@ -948,7 +867,6 @@ final class StrokeMesher
 			}
 		}
 
-		/** Puts the four corners in ax and ay, without corners that are the same point, and returns their count. */
 		private int quad(double x00, double x01, double x11, double x10, double y0, double y1)
 		{
 			int n = 0;
@@ -969,10 +887,7 @@ final class StrokeMesher
 			return n;
 		}
 
-		/**
-		 * Keeps the part of the convex polygon in ax and ay where nx * x + ny * y <= limit (Sutherland-Hodgman).
-		 * Returns the new vertex count. The result is in ax and ay again.
-		 */
+		// Sutherland-Hodgman, keeps nx * x + ny * y <= limit
 		private int clip(int n, double nx, double ny, double limit)
 		{
 			if (bx.length < n * 2 + 2)
@@ -1007,10 +922,7 @@ final class StrokeMesher
 			return m;
 		}
 
-		/**
-		 * Adds the polygon in ax and ay to the piece of its zone, with the height of the tile triangle at each vertex.
-		 * The south triangle has the southwest corner, the north triangle has the northeast corner.
-		 */
+		// South triangle heights from sw, north from ne
 		private void emit(int n, int worldX, int worldY, double tileX, double tileY, int sw, int se, int ne, int nw, boolean south)
 		{
 			if (n < 3 || Math.abs(signedArea(n)) < EPSILON)
@@ -1043,7 +955,7 @@ final class StrokeMesher
 				piece = new Piece(zoneX, zoneY);
 				if (line != null)
 				{
-					piece.d = new float[piece.x.length];
+					piece.distances = new float[piece.x.length];
 				}
 				pieces.put(key, piece);
 				order.add(piece);

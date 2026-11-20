@@ -15,13 +15,13 @@ import net.runelite.client.config.Units;
 @ConfigGroup(RsPaintConfig.GROUP)
 public interface RsPaintConfig extends Config
 {
-	// Saved strokes, colors and the stroke size are in this group too, so it must not change.
+	// Changing this loses saved strokes, colors and sizes
 	String GROUP = "rspaint";
 
 	@ConfigItem(
 		keyName = "drawKeybind",
 		name = "Draw keybind",
-		description = "Hold this key and click and drag to draw. If Toggle draw and erase is on, press it to turn draw mode on or off.",
+		description = "Hold this key and drag the mouse to draw, or press it to switch draw mode on and off when Toggle draw and erase is on.",
 		position = 0
 	)
 	default Keybind drawKeybind()
@@ -32,7 +32,7 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "eraseKeybind",
 		name = "Erase keybind",
-		description = "Hold this key and click and drag to erase. If Toggle draw and erase is on, press it to turn erase mode on or off.",
+		description = "Hold this key and drag the mouse to erase, or press it to switch erase mode on and off when Toggle draw and erase is on.",
 		position = 1
 	)
 	default Keybind eraseKeybind()
@@ -43,7 +43,7 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "undoKeybind",
 		name = "Undo keybind",
-		description = "In draw mode or erase mode, press this key to undo your last line or erase.",
+		description = "Undoes your last line or erase while you're drawing or erasing.",
 		position = 2
 	)
 	default Keybind undoKeybind()
@@ -54,7 +54,7 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "redoKeybind",
 		name = "Redo keybind",
-		description = "In draw mode or erase mode, press this key to redo the last change that you undid.",
+		description = "Redoes the last change you undid while you're drawing or erasing.",
 		position = 3
 	)
 	default Keybind redoKeybind()
@@ -65,7 +65,7 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "toggleModes",
 		name = "Toggle draw and erase",
-		description = "Press the draw or erase key once to turn the mode on, and again to turn it off, instead of holding the key.",
+		description = "Press the draw or erase key to turn its mode on and press it again to turn it off, instead of holding it down.",
 		position = 4
 	)
 	default boolean toggleModes()
@@ -75,7 +75,7 @@ public interface RsPaintConfig extends Config
 
 	@ConfigSection(
 		name = "Rendering",
-		description = "These settings change only how strokes look on your screen. They do not change the strokes that party members get.",
+		description = "These only change how strokes look on your screen, not what your party sees.",
 		position = 5
 	)
 	String renderingSection = "rendering";
@@ -83,7 +83,7 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "drawInWorld",
 		name = "Draw in the world",
-		description = "With the GPU plugin or 117 HD, strokes are part of the game world. Your character, other players, NPCs, objects and projectiles show in front of them, and strokes keep their width on the ground. If this is off, or without these plugins, strokes show over the game.",
+		description = "With the GPU plugin or 117 HD, strokes are drawn into the game world, so players, NPCs, objects and projectiles show in front of them and strokes keep their width on the ground. Otherwise strokes are drawn over the game.",
 		section = renderingSection,
 		position = 0
 	)
@@ -95,7 +95,7 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "lineStyle",
 		name = "Line style",
-		description = "Straight connects the points with straight lines. Smooth draws curves near the points and hides small steps. Smooth through points draws curves that touch each point.",
+		description = "Straight joins the points with straight lines, Smooth curves near the points to hide small wobbles, and Smooth through points curves through every point.",
 		section = renderingSection,
 		position = 1
 	)
@@ -107,7 +107,7 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "antialiasing",
 		name = "Smooth edges",
-		description = "Draws strokes over the game with antialiasing (soft line edges). For strokes in the world, the anti-aliasing setting of the GPU plugin or 117 HD applies.",
+		description = "Antialiases strokes drawn over the game. Strokes in the world use the anti-aliasing setting of the GPU plugin or 117 HD instead.",
 		section = renderingSection,
 		position = 2
 	)
@@ -119,7 +119,7 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "scaleWidthWithZoom",
 		name = "Scale width with zoom",
-		description = "Makes strokes wider when you zoom in and thinner when you zoom out, so that they keep their size on the ground. The stroke size on the toolbar is the width at the default zoom in fixed mode.",
+		description = "Makes strokes wider as you zoom in and thinner as you zoom out so they keep their size on the ground, with the toolbar size matching the default zoom in fixed mode.",
 		section = renderingSection,
 		position = 3
 	)
@@ -131,7 +131,7 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "transparentStrokes",
 		name = "Transparent strokes",
-		description = "Lets the game show through strokes that have a transparent color, and through all strokes if Stroke opacity is less than 100%. Where a stroke crosses itself, it does not get darker. Where a stroke crosses an older stroke, the colors mix. If this is off, all strokes are opaque.",
+		description = "Lets the game show through transparent colors, and through every stroke when Stroke opacity is under 100%. A stroke doesn't darken where it crosses itself, but its color mixes with older strokes it crosses. When this is off, all strokes are opaque.",
 		section = renderingSection,
 		position = 4
 	)
@@ -145,7 +145,7 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "strokeOpacity",
 		name = "Stroke opacity",
-		description = "Changes the opacity of all strokes, if Transparent strokes is on. It multiplies the opacity of each stroke color. At 100%, each stroke keeps the opacity of its color.",
+		description = "Scales the opacity of every stroke color when Transparent strokes is on, so at 100% each stroke keeps the opacity of its color.",
 		section = renderingSection,
 		position = 5
 	)
@@ -158,7 +158,7 @@ public interface RsPaintConfig extends Config
 	@ConfigItem(
 		keyName = "renderDistance",
 		name = "Render distance",
-		description = "Strokes show only on tiles that are up to this many tiles from the camera, like Draw Distance in the GPU plugin. At 0, strokes show on all loaded tiles.",
+		description = "Only shows strokes within this many tiles of the camera, like Draw Distance in the GPU plugin, or on every loaded tile at 0.",
 		section = renderingSection,
 		position = 6
 	)
@@ -167,7 +167,6 @@ public interface RsPaintConfig extends Config
 		return 0;
 	}
 
-	/** How a stroke connects its points on the screen. It changes only the drawing, not the stored points. */
 	@RequiredArgsConstructor
 	enum LineStyle
 	{

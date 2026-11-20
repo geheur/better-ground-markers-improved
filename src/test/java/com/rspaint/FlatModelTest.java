@@ -10,7 +10,6 @@ public class FlatModelTest
 {
 	private static final float[] GAMMAS = {1f, 0.9f, 0.8f, 0.7f, 0.6f};
 
-	/** The largest difference of one channel, from 0 to 255, between the color and what the renderer shows for hsl. */
 	private static float error(Color color, int hsl, float gamma)
 	{
 		float[] shown = FlatModel.rgb(hsl);
@@ -23,7 +22,6 @@ public class FlatModelTest
 		return max;
 	}
 
-	/** The redmean distance that FlatModel.nearestHsl makes smallest. */
 	private static float distance(Color color, int hsl, float gamma)
 	{
 		float[] shown = FlatModel.rgb(hsl);
@@ -36,8 +34,7 @@ public class FlatModelTest
 	@Test
 	public void paletteColorsShowNearlyAsTheyAre()
 	{
-		// At the default brightness of the game and with 117 HD. Brighter settings cannot show strong colors such as
-		// pure yellow, because the renderer raises each channel to the gamma and the saturation is at most 0.9375.
+		// Default 117 HD brightness: channels raised to gamma, saturation at most 0.9375
 		for (float gamma : new float[]{1f, 0.8f})
 		{
 			for (Color color : BGMIOverlay.DEFAULT_PALETTE)
@@ -65,7 +62,7 @@ public class FlatModelTest
 	@Test
 	public void redStaysRed()
 	{
-		// JagexColor.rgbToHSL wraps this red to hue 1, which shows as orange.
+		// rgbToHSL wraps this red to hue 1 (orange)
 		int hsl = FlatModel.nearestHsl(new Color(0xED1C24), 0.8f);
 		int hue = hsl >> 10 & 63;
 		assertTrue("hue " + hue, hue == 0 || hue == 63);

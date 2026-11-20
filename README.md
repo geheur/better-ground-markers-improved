@@ -6,39 +6,26 @@
   <a href="rspaint.mp4">Watch the demo video</a>
 </video>
 
-Press the draw hotkey (default `ctrl-b`) to turn draw mode on, then click and drag the mouse to doodle on the ground. Press `ctrl-e` to turn erase mode on. Press the hotkey again to turn the mode off.
+Press the draw hotkey (`ctrl-b` by default) to turn on draw mode, then click and drag to doodle on the ground. `ctrl-e` turns on erase mode, and pressing a hotkey again turns its mode off. While either mode is on, left clicks draw or erase instead of moving your character.
 
-Change colors by clicking the menu on the left side of the screen.
+If you prefer to hold the hotkeys, turn off Toggle draw and erase in the settings, and each mode stays on only while its key is held. Only one mode can be on at a time, so pressing the other key switches straight over.
 
-To hold the hotkeys instead, turn off Toggle draw and erase in the settings. Then the mode is on only while you hold its hotkey. Draw mode and erase mode cannot both be on. If you press the erase key in draw mode, erase mode replaces draw mode. The opposite is also true.
+The toolbar on the left side of the screen shows while you draw or erase. It has 20 color slots, which can be transparent, along with buttons to reset the palette and change the stroke size. The Rendering settings change how strokes look on your screen.
 
-While you draw or erase, a left click draws or erases, and does not move your character.
+Lines stay on the floor you drew them on, so going up or down stairs shows the lines of that floor. Lines drawn before the plugin knew about floors show on the ground floor. When the GPU plugin draws the ground past the loading lines, your lines show out there too.
 
-A line shows only on the floor where you drew it. If you go up or down stairs, you see the lines of the new floor. Lines that you drew before floors existed in the plugin show on the ground floor.
-
-If the GPU plugin loads the ground past the loading lines, lines show on that ground too.
-
-To undo your last line or erase, press the undo key (default `ctrl-z`) while you draw or erase. To redo it, press the redo key (default `ctrl-shift-z`). One erase drag undoes as one change. Undo goes back 100 changes. If you are in a party, your party members see the undo and the redo too. Reset canvas deletes the undo history.
-
-The toolbar has 20 color slots, a button that resets the palette, and buttons that change the stroke size. The toolbar shows only while you draw or erase. Colors can be transparent. Use the Rendering settings to change how strokes look on your screen.
+Undo (`ctrl-z`) and redo (`ctrl-shift-z`) work while you draw or erase and go back up to 100 changes, with a whole erase drag counting as one change. Your party sees your undos and redos as well, and Reset canvas clears the history.
 
 ## Party drawings
-If you are in a party, your party members see your drawings near you while you draw. You see their drawings too. Each member has a separate canvas, and you can erase only your own strokes. To join a party, use the Party plugin.
+When you are in a party (join one with the Party plugin), the other members see your drawings near you as you draw, and you see theirs. Everyone has their own canvas, so you can only erase your own strokes.
 
-When a member joins the party, all members get your newest 1000 strokes again. Your older strokes stay on your screen, but your party members do not see them after that.
+Whenever someone joins, the party gets your newest 1000 strokes again, and anything older stays on your screen but drops off for everyone else.
 
-To open the RsPaint panel, click the paintbrush icon in the side bar. The panel shows you and each party member.
-
-- To hide or show the drawings of a player, click the switch next to the name.
-- To delete your drawings in the area around you, click Reset canvas. This deletes them for you and for your party members. Your drawings in other places stay. You cannot undo this.
+The paintbrush icon in the side bar opens the RsPaint panel, which lists you and each party member. The switch next to a name hides or shows that player's drawings. Reset canvas permanently deletes your drawings in the area around you, for you and for the whole party, while your drawings in other places stay.
 
 ## Import and export drawings
-Export copies drawings to the clipboard as JSON text. Import reads that text from the clipboard. Use the RsPaint panel.
+The RsPaint panel can copy drawings to the clipboard as JSON text and read them back in. Export next to a party member's name copies their drawings, and next to your own name it copies your drawings in the area around you. Export shown drawings puts everyone whose switch is on into a single export.
 
-- To copy your drawings in the area around you, or the drawings of a party member, click Export next to the name.
-- To copy the drawings of all players whose switch is on, click Export shown drawings. All of the drawings go into one export.
-- To add drawings from the clipboard, copy an export, then click Import drawings. The panel shows the number of strokes and asks you to confirm. If you are in a party, your party members see the imported drawings too.
+To bring drawings in, copy an export and click Import drawings. The panel shows the stroke count and asks you to confirm, then adds the strokes to what you already have. Imported strokes become yours, so you can erase them, and your party sees them too.
 
-Imported drawings become your strokes, so you can erase them. Import does not delete the drawings that you already have.
-
-To keep an export, paste it into a text file. To share it, paste it into a message.
+An export is plain text, so you can keep it in a file or paste it into a message to share it.
