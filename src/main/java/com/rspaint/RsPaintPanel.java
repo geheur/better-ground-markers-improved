@@ -271,7 +271,7 @@ public class RsPaintPanel extends PluginPanel
 				}
 				else
 				{
-					exportDrawings(() -> partySync.memberStrokes(row.getMemberId()));
+					exportDrawings(() -> overlay.forExport(partySync.memberStrokes(row.getMemberId())));
 				}
 			}
 
@@ -349,7 +349,7 @@ public class RsPaintPanel extends PluginPanel
 			{
 				strokes.addAll(overlay.ownStrokes());
 			}
-			strokes.addAll(partySync.visibleMemberStrokes());
+			strokes.addAll(overlay.forExport(partySync.visibleMemberStrokes()));
 			return strokes;
 		});
 	}
@@ -439,8 +439,32 @@ public class RsPaintPanel extends PluginPanel
 			"Import drawings", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
 		if (result == JOptionPane.OK_OPTION)
 		{
-			clientThread.invokeLater(() -> overlay.importStrokes(strokes));
+			clientThread.invokeLater(() ->
+			{
+				int saved = overlay.importStrokes(strokes);
+				SwingUtilities.invokeLater(() -> showImportResult(saved, strokes.size()));
+			});
 		}
+	}
+
+	private void showImportResult(int saved, int total)
+	{
+		if (saved == -1)
+		{
+			JOptionPane.showMessageDialog(this, "Drawings can't be imported inside an instance. Leave the instance and import again."
+					+ " Drawings exported inside an instance show up there again on your next visit.",
+				"Import drawings", JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
+		if (saved < total)
+		{
+			JOptionPane.showMessageDialog(this, "Added " + saved + " of " + strokeCount(total) + " to your drawings."
+					+ " RsPaint can't read the saved strokes in the area of the others, so they were left out.",
+				"Import drawings", JOptionPane.WARNING_MESSAGE);
+			return;
+		}
+		JOptionPane.showMessageDialog(this, "Added " + strokeCount(saved) + " to your drawings.",
+			"Import drawings", JOptionPane.INFORMATION_MESSAGE);
 	}
 
 	private static String readClipboardText() throws IOException, UnsupportedFlavorException

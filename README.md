@@ -39,4 +39,6 @@ The RsPaint panel can copy drawings to the clipboard as JSON text and read them 
 
 To bring drawings in, copy an export and click Import drawings. The panel shows the stroke count and asks you to confirm, then adds the strokes to what you already have. Imported strokes become yours, so you can erase them, and your party sees them too.
 
+Import drawings does not work inside an instance. An export made inside an instance holds the positions of the map area that the instance copies. Import it outside the instance, and the drawings show up in the instance on your next visit.
+
 An export is plain text, so you can keep it in a file or paste it into a message to share it.

@@ -24,6 +24,7 @@ import java.awt.geom.Point2D;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
@@ -1277,23 +1278,68 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	// Client thread only
 	List<PartyCanvasSync.SyncedStroke> ownStrokes()
 	{
-		List<PartyCanvasSync.SyncedStroke> result = new ArrayList<>();
+		List<Stroke> own = new ArrayList<>();
 		for (List<Stroke> strokes : strokesByRegion.values())
 		{
-			for (Stroke stroke : strokes)
+			own.addAll(strokes);
+		}
+		return forExport(own);
+	}
+
+	// Client thread only. Party members in the same instance share its coordinates
+	List<PartyCanvasSync.SyncedStroke> forExport(List<PartyCanvasSync.SyncedStroke> synced)
+	{
+		if (instanceMap == null)
+		{
+			return synced;
+		}
+		List<Stroke> strokes = new ArrayList<>();
+		for (PartyCanvasSync.SyncedStroke stroke : synced)
+		{
+			strokes.add(PartyCanvasSync.fromSynced(stroke));
+		}
+		return forExport(strokes);
+	}
+
+	// In an instance, template coordinates, since instance coordinates change each visit
+	// An overworld import then saves them where the instance reads them
+	private List<PartyCanvasSync.SyncedStroke> forExport(Collection<Stroke> strokes)
+	{
+		List<PartyCanvasSync.SyncedStroke> result = new ArrayList<>();
+		Set<String> templateIds = new HashSet<>();
+		for (Stroke stroke : strokes)
+		{
+			if (stroke.pts.isEmpty())
 			{
-				if (!stroke.pts.isEmpty())
-				{
-					result.add(PartyCanvasSync.toSynced(stroke, stroke.pts));
-				}
+				continue;
+			}
+			if (instanceMap == null)
+			{
+				result.add(PartyCanvasSync.toSynced(stroke, stroke.pts));
+				continue;
+			}
+			// Copies of one saved stroke export once
+			if (stroke.templateId != null && !templateIds.add(stroke.templateId))
+			{
+				continue;
+			}
+			PartyCanvasSync.SyncedStroke template = instanceMap.toTemplate(stroke);
+			if (template != null)
+			{
+				result.add(template);
 			}
 		}
 		return result;
 	}
 
 	// New ids, over existing strokes in list order. Client thread only
-	void importStrokes(List<PartyCanvasSync.SyncedStroke> strokes)
+	// Returns the number saved, or -1 in an instance, where outside coordinates point at the wrong chunks
+	int importStrokes(List<PartyCanvasSync.SyncedStroke> strokes)
 	{
+		if (instanceMap != null)
+		{
+			return -1;
+		}
 		Set<Integer> changedRegions = new LinkedHashSet<>();
 		List<Stroke> imported = new ArrayList<>();
 		for (PartyCanvasSync.SyncedStroke synced : strokes)
@@ -1309,12 +1355,20 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			stroke.plane = synced.getPlane();
 			stroke.rainbow = synced.isRainbow();
 			stroke.pts.addAll(StrokeCodec.simplify(synced.getPoints()));
-			regionStrokes(stroke.primaryRegion()).add(stroke);
-			changedRegions.add(stroke.primaryRegion());
+			int region = stroke.primaryRegion();
+			List<Stroke> regionList = regionStrokes(region);
+			if (unreadableRegions.contains(region))
+			{
+				// Would be lost on next load
+				continue;
+			}
+			regionList.add(stroke);
+			changedRegions.add(region);
 			imported.add(stroke);
 		}
 		changedRegions.forEach(this::saveStrokes);
 		partySync.onStrokesRestored(imported);
+		return imported.size();
 	}
 
 	private void drawStrokes(Graphics2D graphics, int mx, int my)
