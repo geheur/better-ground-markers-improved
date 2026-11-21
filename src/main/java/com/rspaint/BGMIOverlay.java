@@ -2036,6 +2036,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	public void startUp() {
 		showOwnStrokes = true;
 		resetCanvas();
+		// Inside an instance, saves need the instance map before the next scene load
+		clientThread.invoke(this::loadCurrentScene);
 
 		Integer savedSize = configManager.getConfiguration(RsPaintConfig.GROUP, "strokeSize", Integer.class);
 		strokeSize = savedSize != null ? Math.max(Stroke.MIN_WIDTH, Math.min(Stroke.MAX_WIDTH, savedSize)) : Stroke.MIN_WIDTH;
@@ -2088,15 +2090,19 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	@Subscribe public void onProfileChanged(ProfileChanged e) {
 		clientThread.invoke(() -> {
-			// New profile has own strokes, colors, size
-			startUp();
 			// Party members still have the old profile strokes
 			partySync.onCanvasCleared();
-			WorldView worldView = client.getTopLevelWorldView();
-			if (client.getGameState() == GameState.LOGGED_IN && worldView != null) {
-				loadScene(worldView);
-			}
+			// New profile has own strokes, colors, size
+			startUp();
 		});
+	}
+
+	// Client thread only
+	private void loadCurrentScene() {
+		WorldView worldView = client.getTopLevelWorldView();
+		if (client.getGameState() == GameState.LOGGED_IN && worldView != null) {
+			loadScene(worldView);
+		}
 	}
 
 	private void useDefaultPalette() {
