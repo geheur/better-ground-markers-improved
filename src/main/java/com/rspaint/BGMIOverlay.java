@@ -57,6 +57,7 @@ import net.runelite.api.events.BeforeRender;
 import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.FocusChanged;
 import net.runelite.api.events.GameStateChanged;
+import net.runelite.api.events.GameTick;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -324,6 +325,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		// Mouse can be up before the next frame ends the stroke
 		finishStroke();
 		currentErase = null;
+		savePendingErases();
 		return stack.poll();
 	}
 
@@ -518,6 +520,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		if (!erasing)
 		{
 			currentErase = null;
+			savePendingErases();
 		}
 
 		boolean showUi = eraseMode || drawMode || drawing || erasing;
@@ -876,6 +879,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	}
 
 	@Subscribe public void onGameStateChanged(GameStateChanged e) {
+		// Before a scene load drops the region lists
+		savePendingErases();
 		if (e.getGameState() == GameState.LOADING) {
 			// Ground heights changed
 			sceneStrokes.sceneChanged();
@@ -1259,6 +1264,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	// Loaded regions only, other regions stay saved
 	public void clearCanvas()
 	{
+		// Emptied lists are not saved below
+		savePendingErases();
 		currentStroke = null;
 		skippedPoint = null;
 		// Copy, instance saves can add a region list
@@ -1473,19 +1480,24 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return regions;
 	}
 
-	// Reused
+	// Reused. Filled in onBeforeRender, then the overlay draws the same list in that frame
 	private final List<Stroke> visibleStrokes = new ArrayList<>();
+	private boolean visibleStrokesCollected = false;
 	// Oldest strokes drop first. Members keep 100,000 points each, but a big party can pass this
 	private static final int MAX_DRAWN_POINTS = 200_000;
 
 	private void drawStrokes(Graphics2D graphics, WorldView worldView, int[] regions, int mx, int my, LineStyle style)
 	{
-		if (erasing)
+		if (erasing && eraseOwnStrokes(worldView, regions, pf(mx, my), style))
 		{
-			eraseOwnStrokes(worldView, regions, pf(mx, my), style);
+			visibleStrokes.clear();
+			visibleStrokesCollected = false;
 		}
 
-		collectStrokes(worldView, regions, visibleStrokes);
+		if (!visibleStrokesCollected)
+		{
+			collectStrokes(worldView, regions, visibleStrokes);
+		}
 		try
 		{
 			for (Stroke s : visibleStrokes)
@@ -1500,6 +1512,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		finally
 		{
 			visibleStrokes.clear();
+			visibleStrokesCollected = false;
 		}
 	}
 
@@ -1531,11 +1544,10 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		out.subList(0, first).clear();
 	}
 
-	// Reused
-	private final List<Stroke> worldStrokes = new ArrayList<>();
-
 	@Subscribe public void onBeforeRender(BeforeRender e)
 	{
+		visibleStrokes.clear();
+		visibleStrokesCollected = false;
 		WorldView worldView = client.getTopLevelWorldView();
 		if (!config.drawInWorld() || client.getGameState() != GameState.LOGGED_IN || worldView == null)
 		{
@@ -1543,17 +1555,11 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			return;
 		}
 		int[] regions = sceneRegions(worldView);
-		collectStrokes(worldView, regions, worldStrokes);
-		try
-		{
-			float opacity = Math.max(0f, Math.min(1f, config.strokeOpacity() / 100f));
-			sceneStrokes.update(worldView, worldStrokes, currentStroke, config.scaleWidthWithZoom(), client.getScale(),
-				config.lineStyle(), config.transparentStrokes(), opacity, Math.max(0, config.renderDistance()));
-		}
-		finally
-		{
-			worldStrokes.clear();
-		}
+		collectStrokes(worldView, regions, visibleStrokes);
+		visibleStrokesCollected = true;
+		float opacity = Math.max(0f, Math.min(1f, config.strokeOpacity() / 100f));
+		sceneStrokes.update(worldView, visibleStrokes, currentStroke, config.scaleWidthWithZoom(), client.getScale(),
+			config.lineStyle(), config.transparentStrokes(), opacity, Math.max(0, config.renderDistance()));
 	}
 
 	// Set in render
@@ -1600,8 +1606,10 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		graphics.draw(circle);
 	}
 
-	private void eraseOwnStrokes(WorldView worldView, int[] regions, pf eraseAt, LineStyle style)
+	// True if a stroke was erased
+	private boolean eraseOwnStrokes(WorldView worldView, int[] regions, pf eraseAt, LineStyle style)
 	{
+		boolean erasedAny = false;
 		// Eraser skips other floors
 		int plane = worldView.getPlane();
 		for (int region : regions)
@@ -1623,11 +1631,32 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			if (toErase != null)
 			{
 				strokes.removeAll(toErase);
-				saveStrokes(region);
+				pendingEraseSaves.add(region);
 				partySync.onStrokesErased(toErase);
 				recordErase(toErase);
+				erasedAny = true;
 			}
 		}
+		return erasedAny;
+	}
+
+	// Eraser saves once per game tick, not on every frame that hits a stroke
+	private final Set<Integer> pendingEraseSaves = new LinkedHashSet<>();
+
+	private void savePendingErases()
+	{
+		if (pendingEraseSaves.isEmpty())
+		{
+			return;
+		}
+		List<Integer> regions = new ArrayList<>(pendingEraseSaves);
+		pendingEraseSaves.clear();
+		regions.forEach(this::saveStrokes);
+	}
+
+	@Subscribe public void onGameTick(GameTick e)
+	{
+		savePendingErases();
 	}
 
 	private BasicStroke basicStroke = newBasicStroke(1f);
@@ -2135,6 +2164,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 
 	// Client thread only
 	public void shutDown() {
+		savePendingErases();
 		resetCanvas();
 	}
 
@@ -2145,6 +2175,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		templateStrokes.clear();
 		unreadableRegions.clear();
 		warnedRegions.clear();
+		// After a profile change these would save into the new profile
+		pendingEraseSaves.clear();
 		clearHistory();
 		currentStroke = null;
 		skippedPoint = null;
