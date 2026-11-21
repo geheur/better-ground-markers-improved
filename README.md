@@ -6,6 +6,17 @@
   <a href="rspaint.mp4">Watch the demo video</a>
 </video>
 
+## Features
+- Draw and erase lines on the ground with a hotkey and the mouse.
+- Keep up to 20 colors in the palette, with transparent colors and rainbow strokes.
+- Drag a color to another slot to move it. The color you drag stays selected.
+- A color that you pick or add to a slot becomes the selected color.
+- Change the stroke size from the toolbar.
+- Lines stay on the floor that you drew them on.
+- Undo and redo up to 100 changes.
+- See the drawings of party members near you, and hide each player's drawings.
+- Import and export drawings as JSON text.
+
 Press the draw hotkey (`ctrl-b` by default) to turn on draw mode, then click and drag to doodle on the ground. `ctrl-e` turns on erase mode, and pressing a hotkey again turns its mode off. While either mode is on, left clicks draw or erase instead of moving your character.
 
 If you prefer to hold the hotkeys, turn off Toggle draw and erase in the settings, and each mode stays on only while its key is held. Only one mode can be on at a time, so pressing the other key switches straight over.
@@ -17,7 +28,7 @@ Lines stay on the floor you drew them on, so going up or down stairs shows the l
 Undo (`ctrl-z`) and redo (`ctrl-shift-z`) work while you draw or erase and go back up to 100 changes, with a whole erase drag counting as one change. Your party sees your undos and redos as well, and Reset canvas clears the history.
 
 ## Party drawings
-When you are in a party (join one with the Party plugin), the other members see your drawings near you as you draw, and you see theirs. Everyone has their own canvas, so you can only erase your own strokes.
+When you are in a party, other members see your drawings near you as you draw, and you see theirs. Everyone has their own canvas, so you can only erase your own strokes.
 
 Whenever someone joins, the party gets your newest 1000 strokes again, and anything older stays on your screen but drops off for everyone else.
 
