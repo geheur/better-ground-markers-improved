@@ -249,41 +249,6 @@ public class StrokeMesherTest
 	}
 
 	@Test
-	public void longScribbleIsFastEnough()
-	{
-		Random random = new Random(1);
-		List<StrokePoint> pts = new ArrayList<>();
-		double x = 3200 * 128, y = 3200 * 128, angle = 0;
-		for (int i = 0; i < 2000; i++)
-		{
-			angle += random.nextGaussian() * 0.5;
-			x += Math.cos(angle) * 12;
-			y += Math.sin(angle) * 12;
-			pts.add(new StrokePoint((int) Math.floor(x / 128), (int) Math.floor(y / 128),
-				(float) (x / 128 - Math.floor(x / 128)), (float) (y / 128 - Math.floor(y / 128))));
-		}
-		for (LineStyle style : LineStyle.values())
-		{
-			long c0 = System.nanoTime();
-			int chunkFaces = 0;
-			for (int from = 0; from < pts.size() - 1; from += 48)
-			{
-				chunkFaces += StrokeMesher.build(pts, from, Math.min(from + 48, pts.size() - 1), 25, style, SLOPE).pieces.stream().mapToInt(p -> p.faces).sum();
-			}
-			System.out.println("chunks of 48: " + (System.nanoTime() - c0) / 1_000_000 + " ms, " + chunkFaces + " faces");
-			long start = System.nanoTime();
-			StrokeMesher.Mesh mesh = build(pts, 25, style, SLOPE);
-			long ms = (System.nanoTime() - start) / 1_000_000;
-			int faces = mesh.pieces.stream().mapToInt(p -> p.faces).sum();
-			System.out.println(style + ": " + ms + " ms, " + faces + " faces, " + mesh.pieces.size() + " zones");
-			start = System.nanoTime();
-			StrokeMesher.Mesh rainbow = StrokeMesher.build(pts, 0, pts.size() - 1, 25, style, SLOPE, true);
-			System.out.println(style + " rainbow: " + (System.nanoTime() - start) / 1_000_000 + " ms, "
-				+ rainbow.pieces.stream().mapToInt(p -> p.faces).sum() + " faces");
-		}
-	}
-
-	@Test
 	public void rainbowHasTheSameShapeAndDistancesAlongTheLine()
 	{
 		// 3.5 tiles long
@@ -312,52 +277,6 @@ public class StrokeMesherTest
 		}
 		// Small cells put color vertices close together
 		assertTrue(rainbowVertices > plainVertices * 2);
-	}
-
-	@Test
-	public void rainbowScribbleInOnePlaceIsFastToDraw()
-	{
-		// Repeated stroke over a few tiles, as SceneStrokes makes it:
-		// last CHUNK_POINTS points remeshed per new point
-		Random random = new Random(3);
-		List<StrokePoint> pts = new ArrayList<>();
-		double cx = 3200.5 * 128, cy = 3200.5 * 128, x = cx, y = cy, angle = 0;
-		for (int width : new int[]{40, 160})
-		{
-			pts.clear();
-			long worst = 0, total = 0;
-			int builds = 0;
-			for (int i = 0; i < 600; i++)
-			{
-				angle += random.nextGaussian() * 0.6;
-				// Pulled to middle, keeps stroke on about three tiles
-				angle += Math.atan2(cy - y, cx - x) * 0.05;
-				x += Math.cos(angle) * 14;
-				y += Math.sin(angle) * 14;
-				pts.add(new StrokePoint((int) Math.floor(x / 128), (int) Math.floor(y / 128),
-					(float) (x / 128 - Math.floor(x / 128)), (float) (y / 128 - Math.floor(y / 128))));
-				if (pts.size() < 2)
-				{
-					continue;
-				}
-				int from = (pts.size() - 2) / 48 * 48;
-				long start = System.nanoTime();
-				StrokeMesher.build(pts, from, pts.size() - 1, width, LineStyle.THROUGH_POINTS, SLOPE, true);
-				long time = System.nanoTime() - start;
-				if (i > 50)
-				{
-					worst = Math.max(worst, time);
-					total += time;
-					builds++;
-				}
-			}
-			long start = System.nanoTime();
-			StrokeMesher.Mesh whole = StrokeMesher.build(pts, 0, pts.size() - 1, width, LineStyle.THROUGH_POINTS, SLOPE, true);
-			System.out.println("scribble width " + width + ": part " + total / builds / 1000 + " us mean, " + worst / 1000
-				+ " us worst; whole " + (System.nanoTime() - start) / 1_000_000 + " ms, "
-				+ whole.pieces.stream().mapToInt(p -> p.faces).sum() + " faces; one color "
-				+ build(pts, width, LineStyle.THROUGH_POINTS, SLOPE).pieces.stream().mapToInt(p -> p.faces).sum() + " faces");
-		}
 	}
 
 	@Test
