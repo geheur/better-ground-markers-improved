@@ -9,7 +9,7 @@
 ## Features
 - Draw and erase lines on the ground with a hotkey and the mouse.
 - Keep up to 20 colors in the palette, with transparent colors and rainbow strokes.
-- Drag a color to another slot to move it. The color you drag stays selected.
+- Drag a color onto another slot to swap the two. The color you drag stays selected.
 - A color that you pick or add to a slot becomes the selected color.
 - Change the stroke size from the toolbar.
 - Lines stay on the floor that you drew them on.
