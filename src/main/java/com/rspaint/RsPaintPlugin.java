@@ -55,16 +55,20 @@ public class RsPaintPlugin extends Plugin
 	@Override
 	protected void startUp() throws Exception
 	{
-		sceneStrokes.startUp();
-		eventBus.register(sceneStrokes);
-		bgmiOverlay.startUp();
-		overlayManager.add(bgmiOverlay);
+		// Client thread, so after a quick restart this runs after the queued shutdown
+		clientThread.invoke(() ->
+		{
+			sceneStrokes.startUp();
+			eventBus.register(sceneStrokes);
+			bgmiOverlay.startUp();
+			overlayManager.add(bgmiOverlay);
+			eventBus.register(bgmiOverlay);
+
+			partySync.startUp();
+			eventBus.register(partySync);
+		});
 		mouseManager.registerMouseListener(bgmiOverlay);
 		keyManager.registerKeyListener(bgmiOverlay);
-		eventBus.register(bgmiOverlay);
-
-		partySync.startUp();
-		eventBus.register(partySync);
 
 		eventBus.register(panel);
 		navigationButton = NavigationButton.builder()
@@ -80,19 +84,22 @@ public class RsPaintPlugin extends Plugin
 	@Override
 	protected void shutDown() throws Exception
 	{
-		overlayManager.remove(bgmiOverlay);
 		mouseManager.unregisterMouseListener(bgmiOverlay);
 		keyManager.unregisterKeyListener(bgmiOverlay);
-		eventBus.unregister(bgmiOverlay);
-		bgmiOverlay.shutDown();
+		// Canvas, scene objects and party state are client thread only
+		clientThread.invoke(() ->
+		{
+			overlayManager.remove(bgmiOverlay);
+			eventBus.unregister(bgmiOverlay);
+			bgmiOverlay.shutDown();
 
-		// Scene objects go on the client thread
-		eventBus.unregister(sceneStrokes);
-		sceneStrokes.shutDown();
-		clientThread.invokeLater(sceneStrokes::clearAll);
+			eventBus.unregister(sceneStrokes);
+			sceneStrokes.shutDown();
+			sceneStrokes.clearAll();
 
-		eventBus.unregister(partySync);
-		partySync.shutDown();
+			eventBus.unregister(partySync);
+			partySync.shutDown();
+		});
 
 		// Members show again on next start
 		eventBus.unregister(panel);

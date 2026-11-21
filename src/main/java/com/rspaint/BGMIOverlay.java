@@ -2033,11 +2033,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	@Override public MouseEvent mouseDragged(MouseEvent e) { return e; }
 	@Override public MouseEvent mouseMoved(MouseEvent e) { return e; }
 
+	// Client thread only
 	public void startUp() {
 		showOwnStrokes = true;
 		resetCanvas();
 		// Inside an instance, saves need the instance map before the next scene load
-		clientThread.invoke(this::loadCurrentScene);
+		loadCurrentScene();
 
 		Integer savedSize = configManager.getConfiguration(RsPaintConfig.GROUP, "strokeSize", Integer.class);
 		strokeSize = savedSize != null ? Math.max(Stroke.MIN_WIDTH, Math.min(Stroke.MAX_WIDTH, savedSize)) : Stroke.MIN_WIDTH;
@@ -2070,8 +2071,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		return loaded;
 	}
 
+	// Client thread only
 	public void shutDown() {
-		clientThread.invokeLater(this::resetCanvas);
+		resetCanvas();
 	}
 
 	// Singleton, so old profile or session strokes would be saved over the stored ones
