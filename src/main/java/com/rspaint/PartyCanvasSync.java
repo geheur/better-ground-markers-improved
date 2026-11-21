@@ -252,6 +252,16 @@ public class PartyCanvasSync
 		}
 	}
 
+	// Client thread only. Same ids at new coordinates, as after entering an instance
+	void onStrokesMoved(Collection<Stroke> strokes)
+	{
+		for (Stroke stroke : strokes)
+		{
+			sentIds.remove(stroke.id);
+		}
+		onStrokesRestored(strokes);
+	}
+
 	void onCanvasCleared()
 	{
 		clearPending();

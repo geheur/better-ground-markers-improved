@@ -973,8 +973,8 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			}
 			if (!loaded.isEmpty())
 			{
-				// Party shares instance coordinates
-				partySync.onStrokesRestored(loaded);
+				// Party shares instance coordinates, which differ from the last visit
+				partySync.onStrokesMoved(loaded);
 			}
 		}
 		// Saves add copies without changing map keys
