@@ -733,6 +733,10 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 				boolean myRainbow = rainbowSlots[colorIndex];
 				rainbowSlots[colorIndex] = rainbowSlots[otherIndex];
 				rainbowSlots[otherIndex] = myRainbow;
+				// Dragged color stays selected at its new slot
+				if (otherIndex != colorIndex && other != null) {
+					selectedColor = colorIndex;
+				}
 				saveColors();
 			}
 		}
@@ -760,6 +764,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	private void setSlot(int index, Color color, boolean rainbow) {
 		colors.set(index, color);
 		rainbowSlots[index] = rainbow;
+		selectedColor = index;
 		saveColors();
 	}
 
