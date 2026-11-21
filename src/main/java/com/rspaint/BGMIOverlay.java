@@ -257,6 +257,14 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		redoStack.clear();
 	}
 
+	// History holds coordinates of one instance layout, or of the overworld
+	private void clearHistory()
+	{
+		undoStack.clear();
+		redoStack.clear();
+		currentErase = null;
+	}
+
 	private void recordErase(List<Stroke> erased)
 	{
 		if (currentErase == null)
@@ -911,6 +919,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		{
 			// Left the instance
 			finishStroke();
+			clearHistory();
 			instanceMap = null;
 			templateStrokes.clear();
 			strokesByRegion.clear();
@@ -930,6 +939,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		{
 			// Save stroke in progress before its list goes
 			finishStroke();
+			clearHistory();
 			instanceMap = new InstanceMap(chunks, baseX, baseY);
 			templateStrokes.clear();
 			strokesByRegion.clear();
@@ -1260,9 +1270,7 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 			}
 		}
 		// A reset cannot be undone
-		undoStack.clear();
-		redoStack.clear();
-		currentErase = null;
+		clearHistory();
 		partySync.onCanvasCleared();
 	}
 
@@ -2083,11 +2091,9 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		templateStrokes.clear();
 		unreadableRegions.clear();
 		warnedRegions.clear();
-		undoStack.clear();
-		redoStack.clear();
+		clearHistory();
 		currentStroke = null;
 		skippedPoint = null;
-		currentErase = null;
 	}
 
 	@Subscribe public void onProfileChanged(ProfileChanged e) {
