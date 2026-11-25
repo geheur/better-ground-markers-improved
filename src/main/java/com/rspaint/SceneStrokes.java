@@ -1071,7 +1071,7 @@ class SceneStrokes
 			whole = null;
 			if (pending != null)
 			{
-				pending.cancel(true);
+				pending.cancel(false);
 				pending = null;
 			}
 			changedFrame = frame;
@@ -1169,7 +1169,7 @@ class SceneStrokes
 		{
 			if (pending != null)
 			{
-				pending.cancel(true);
+				pending.cancel(false);
 			}
 			return true;
 		}
