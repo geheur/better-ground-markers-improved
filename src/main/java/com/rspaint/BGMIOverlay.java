@@ -1340,12 +1340,12 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 	}
 
 	// New ids, over existing strokes in list order. Client thread only
-	// Returns the number saved, or -1 in an instance, where outside coordinates point at the wrong chunks
+	// Returns the number saved
 	int importStrokes(List<PartyCanvasSync.SyncedStroke> strokes)
 	{
 		if (instanceMap != null)
 		{
-			return -1;
+			return importTemplates(strokes);
 		}
 		Set<Integer> changedRegions = new LinkedHashSet<>();
 		List<Stroke> imported = new ArrayList<>();
@@ -1376,6 +1376,56 @@ public class BGMIOverlay extends Overlay implements MouseListener, KeyListener
 		changedRegions.forEach(this::saveStrokes);
 		partySync.onStrokesRestored(imported);
 		return imported.size();
+	}
+
+	// Exports are in template coordinates, so each stroke gets a copy at every place of its chunk
+	// One with its chunk outside this instance is saved but not shown
+	private int importTemplates(List<PartyCanvasSync.SyncedStroke> strokes)
+	{
+		Set<Integer> changedRegions = new LinkedHashSet<>();
+		List<Stroke> imported = new ArrayList<>();
+		int saved = 0;
+		for (PartyCanvasSync.SyncedStroke synced : strokes)
+		{
+			if (synced.getPoints() == null || synced.getPoints().isEmpty())
+			{
+				continue;
+			}
+			PartyCanvasSync.SyncedStroke template = new PartyCanvasSync.SyncedStroke(Stroke.newId(), synced.getColor(),
+				synced.getStrokeWidth(), clock.next(), synced.getPlane(), StrokeCodec.simplify(synced.getPoints()),
+				synced.isRainbow() ? Boolean.TRUE : null);
+			StrokePoint first = template.getPoints().get(0);
+			int region = new WorldPoint(first.getX(), first.getY(), 0).getRegionID();
+			if (unreadableRegions.contains(region))
+			{
+				// Would be lost on next load
+				continue;
+			}
+			List<PartyCanvasSync.SyncedStroke> regionList = templateStrokes.get(region);
+			if (regionList == null)
+			{
+				regionList = readTemplate(region);
+				if (regionList == null)
+				{
+					continue;
+				}
+			}
+			regionList.add(template);
+			changedRegions.add(region);
+			saved++;
+
+			boolean firstCopy = true;
+			for (InstanceMap.Placement placement : instanceMap.placements(template))
+			{
+				Stroke copy = instanceCopy(template, placement, firstCopy);
+				firstCopy = false;
+				strokesByRegion.computeIfAbsent(copy.primaryRegion(), k -> new ArrayList<>()).add(copy);
+				imported.add(copy);
+			}
+		}
+		saveTemplates(changedRegions);
+		partySync.onStrokesRestored(imported);
+		return saved;
 	}
 
 	private void drawStrokes(Graphics2D graphics, int mx, int my)

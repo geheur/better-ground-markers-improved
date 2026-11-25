@@ -449,13 +449,6 @@ public class RsPaintPanel extends PluginPanel
 
 	private void showImportResult(int saved, int total)
 	{
-		if (saved == -1)
-		{
-			JOptionPane.showMessageDialog(this, "Drawings can't be imported inside an instance. Leave the instance and import again."
-					+ " Drawings exported inside an instance show up there again on your next visit.",
-				"Import drawings", JOptionPane.INFORMATION_MESSAGE);
-			return;
-		}
 		if (saved < total)
 		{
 			JOptionPane.showMessageDialog(this, "Added " + saved + " of " + strokeCount(total) + " to your drawings."
